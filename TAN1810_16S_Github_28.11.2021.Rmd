@@ -1,0 +1,2608 @@
+---
+title: "TAN1810_16S"
+author: "FD"
+date: "6/18/2021"
+output: html_document
+---
+
+```{r packages}
+library(phyloseq)  
+library(ggplot2)
+library(ggthemes)
+library("DESeq2")
+library(dplyr)
+library(ALDEx2)
+library(MuMIn)
+library(devtools)
+library(pvclust)
+library(vegan)
+library(Rmisc)
+library(scales)
+library(edgeR)
+library(tidyverse)
+library(patchwork)
+library(mgcv)
+library(FSA)
+library("lme4")
+library(dplyr)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("edgeR")
+
+library(edgeR)
+
+citation("lme4")
+
+remotes::install_github("trevorld/gridpattern")
+remotes::install_github("coolbutuseless/ggpattern")
+
+
+library("ggpattern")
+```
+
+```{r ggplot2 setup}
+#Set up position dodge for ggplot2
+pd = position_dodge(0.15)
+
+set.seed(2)
+
+My_Theme = theme(axis.title.x = element_text(size=18),
+        axis.text.x = element_text(angle=0, colour = "black", vjust=1, hjust = 0.5, size=18), 
+        axis.text.y = element_text(colour = "black", size=18),
+        axis.title.y = element_text(face="bold",size=18),
+        plot.title = element_text(size = 18),
+        legend.title =element_text(size = 18),
+        legend.text = element_text(size = 16),
+        legend.position="right",
+        legend.key.size = unit(1, "cm"),
+        strip.text.x = element_text(size=18, face="bold"),
+        strip.text.y = element_text(size=18, face="bold"),
+        panel.border = element_rect(fill = NA, colour = "black"),
+        strip.background = element_rect(colour="black"))
+```
+
+```{r Import and Subset}
+ASV_16S <-  paste("/Users/fenelladeans/OneDrive/Documents_2017/PhD/2019_Sequencing/", "Phyloseq_object_16S.rds", sep = "")
+ASV_16S
+ASV_16S_Phyloseq= readRDS(ASV_16S)
+ASV_16S_Phyloseq
+
+ASV_16S_Phyloseq_TAN = subset_samples(ASV_16S_Phyloseq, Project == "TAN1810")
+ASV_16S_Phyloseq_TAN
+
+sample_variables(ASV_16S_Phyloseq_TAN)
+sample_sums(ASV_16S_Phyloseq_TAN)
+
+ASV_16S_Phyloseq_TAN = subset_samples(ASV_16S_Phyloseq_TAN, X.SampleID != "C4T4xFPx1"& X.SampleID != "C4T4xFPx2"& X.SampleID != "C4T4xFPx9" & X.SampleID != "C4T4D6x20m" )
+
+#ASV_16S_Phyloseq_TAN = subset_samples(ASV_16S_Phyloseq_TAN, X.SampleID != "C3T4D7x20m" & X.SampleID != "C3T4Dx100m"& X.SampleID != "C3T4Dx40m"& X.SampleID != "C3T4Dx70m"& X.SampleID != "C4T4D6x20m"& X.SampleID != "C4T4D6x20m"& X.SampleID != "C4T4xFPx1"& X.SampleID != "C4T4xFPx2"& X.SampleID != "C4T4xFPx9")
+
+sample_sums(ASV_16S_Phyloseq_TAN)
+
+SS_Tan_1<-sample_sums(ASV_16S_Phyloseq_TAN)
+SS_Tan_1
+write.csv(SS_Tan_1, "/Users/fenelladeans/OneDrive/Documents_2017/PhD/2019_Sequencing/SS_Tan_1.csv")
+```
+
+##Compare sequences per sample or ASV
+```{r Compare sequences per sample or ASV}
+readsumsdf = data.frame(nreads = sort(taxa_sums(ASV_16S_Phyloseq_TAN),TRUE), sorted = 1:ntaxa(ASV_16S_Phyloseq_TAN), type = "ASV")
+readsumsdf = rbind(readsumsdf,data.frame(nreads = sort(sample_sums(ASV_16S_Phyloseq_TAN),TRUE),sorted = 1:nsamples(ASV_16S_Phyloseq_TAN), type = "Samples"))
+
+title = "Total number of reads"
+
+p = ggplot(readsumsdf, aes(x = sorted, y = nreads)) +
+  geom_bar(stat = "identity")
+
+p + ggtitle(title) +
+  scale_y_log10() +
+  facet_wrap(~type, 1, scales = "free")
+
+```
+##Rarefaction curves
+```{r Attic}
+sample_sums(ASV_16S_Phyloseq_TAN) #15, 12,18,14.9,19.8,11,18,
+rarefaction_list = c(1,
+                    10, 
+                    100,
+                    1000,
+                    2000,
+                    3000,
+                    4000,
+                    5000,
+                    6000,
+                    7000,
+                    8000,
+                    9000,
+                    10000,
+                    11000,
+                    12000,
+                    13000,
+                    14000,
+                    14900
+                    )
+
+for (i in rarefaction_list) {
+
+Biofilm_ra = rarefy_even_depth(ASV_16S_Phyloseq_TAN, sample.size = min(i))
+for (y in 1:9){
+
+Biofilm_temp = rarefy_even_depth(ASV_16S_Phyloseq_TAN, sample.size = min(i))  
+  Object = get(paste0("Biofilm_ra"))
+    
+    Biofilm_ra = merge_phyloseq(ASV_16S_Phyloseq_TAN, Object)
+    
+    Object = get(paste0("Biofilm_ra"))
+    assign(paste0("Biofilm_rare_", i, "_16S"), Object)
+  y = y + 1  
+}
+i = i + 1
+}
+
+temp_richness = estimate_richness(ASV_16S_Phyloseq_TAN, measures = "Observed")
+temp_richness 
+```
+
+```{r Function}
+calculate_rarefaction_curves <- function(psdata, measures, depths) {
+  require('plyr') # ldply
+  require('reshape2') # melt
+
+  estimate_rarified_richness <- function(psdata, measures, depth) {
+    if(max(sample_sums(psdata)) < depth) return()
+    psdata <- prune_samples(sample_sums(psdata) >= depth, psdata)
+
+    rarified_psdata <- rarefy_even_depth(psdata, depth, verbose = FALSE)
+
+    alpha_diversity <- estimate_richness(rarified_psdata, measures = measures)
+
+    # as.matrix forces the use of melt.array, which includes the Sample names (rownames)
+    molten_alpha_diversity <- melt(as.matrix(alpha_diversity), varnames = c('Sample', 'Measure'), value.name = 'Alpha_diversity')
+
+    molten_alpha_diversity
+  }
+
+  names(depths) <- depths # this enables automatic addition of the Depth to the output by ldply
+  rarefaction_curve_data <- ldply(depths, estimate_rarified_richness, psdata = psdata, measures = measures, .id = 'Depth', .progress = ifelse(interactive(), 'text', 'none'))
+
+  # convert Depth from factor to numeric
+  rarefaction_curve_data$Depth <- as.numeric(levels(rarefaction_curve_data$Depth))[rarefaction_curve_data$Depth]
+
+  rarefaction_curve_data
+}
+```
+
+```{r Plotting}
+citation(package = "dada2")
+rarefaction_curve_data <- calculate_rarefaction_curves(ASV_16S_Phyloseq_TAN, c('Observed'), rep(c(1, 10, 100, 1:100 * 1000), each = 10))
+summary(rarefaction_curve_data)
+
+rarefaction_curve_data_summary <- ddply(rarefaction_curve_data, c('Depth', 'Sample', 'Measure'), summarise, Alpha_diversity_mean = mean(Alpha_diversity), Alpha_diversity_sd = sd(Alpha_diversity))
+
+colnames(rarefaction_curve_data_summary) = gsub("X","", colnames(rarefaction_curve_data_summary))
+rarefaction_curve_data_summary$Sample = gsub("X","", rarefaction_curve_data_summary$Sample)
+
+rarefaction_curve_data_summary_verbose <- merge(rarefaction_curve_data_summary, data.frame(sample_data(ASV_16S_Phyloseq_TAN))
+                                                , by.x = 'Sample'
+                                                , by.y = 'row.names'
+                                                )
+
+library('ggplot2')
+
+Rarecurve = ggplot(data = rarefaction_curve_data_summary_verbose,
+  mapping = aes(x = Depth,
+                y = Alpha_diversity_mean,
+                ymin = Alpha_diversity_mean - Alpha_diversity_sd,
+                ymax = Alpha_diversity_mean + Alpha_diversity_sd,
+    colour = as.factor(Sample),
+    group = Sample)) + 
+    geom_line(size = 0.8) + 
+  ylab("Observed Mean")+
+  xlab("Tested sequencing depth")+
+  labs(colour = "Time (days)")+
+  theme_bw()+
+  My_Theme#+
+Rarecurve
+pdf("Sampling_Depth_vs_Observed_richness_16S_TAN.pdf", height = 6, width = 8)
+Rarecurve
+dev.off()
+```
+
+##rarefy 10 times, combine, and then utilise the averaged result
+```{r Create average result for multiple rarefaction by transforming data using (divide by 10), results='markup'}
+sample_sums(ASV_16S_Phyloseq_TAN)
+nrow(ASV_16S_Phyloseq_TAN@sam_data)
+
+#Rarefy samples to an even depth
+Biofilm_ra_all = rarefy_even_depth(ASV_16S_Phyloseq_TAN, sample.size = min(14900))
+for (i in 1:9){
+
+Biofilm_ra = rarefy_even_depth(ASV_16S_Phyloseq_TAN, sample.size = min(14900))  
+  Object = get(paste0("Biofilm_ra"))
+    
+    Biofilm_ra_all = merge_phyloseq(Biofilm_ra_all, Object)
+  i = i+1  
+}
+
+sample_sums(Biofilm_ra_all) #Check how many sequences remain
+ASV_16S_Phyloseq_TAN = transform_sample_counts(Biofilm_ra_all, function(x) x/10) #Reduce number of sequences to non-inflated amount again
+sample_sums(ASV_16S_Phyloseq_TAN) #Check how many sequences remain (should be even numbers)
+
+# Round and confirm count number
+ASV_16S_Phyloseq_TAN = transform_sample_counts(ASV_16S_Phyloseq_TAN, round)
+sample_sums(ASV_16S_Phyloseq_TAN)
+ASV_16S_Phyloseq_TAN = prune_samples(sample_sums(ASV_16S_Phyloseq_TAN)>=1, ASV_16S_Phyloseq_TAN)
+sample_sums(ASV_16S_Phyloseq_TAN)
+```
+##Identify and prune taxa with less than 1 count and check taxa numbers again
+```{r  Save original file and create new file with only present (no zeroes) taxa, results='markup', echo=TRUE}
+# Identify taxa with only zeros, results='markup', echo=TRUE
+sum(taxa_sums(ASV_16S_Phyloseq_TAN) > 0)
+any(taxa_sums(ASV_16S_Phyloseq_TAN)== 0)
+sum(taxa_sums(ASV_16S_Phyloseq_TAN) == 0)
+any(taxa_sums(ASV_16S_Phyloseq_TAN) > 1)
+sum(taxa_sums(ASV_16S_Phyloseq_TAN) > 1)
+any(taxa_sums(ASV_16S_Phyloseq_TAN) < 1)
+sum(taxa_sums(ASV_16S_Phyloseq_TAN) < 1)
+
+#Create new file with only present (no zeroes) taxa
+ASV_16S_Phyloseq_TAN = prune_taxa(taxa_sums(ASV_16S_Phyloseq_TAN) > 1, ASV_16S_Phyloseq_TAN)
+any(sample_sums(ASV_16S_Phyloseq_TAN) == 0)
+any(sample_sums(ASV_16S_Phyloseq_TAN) > 0)
+sum(taxa_sums(ASV_16S_Phyloseq_TAN) > 0)
+any(sample_sums(ASV_16S_Phyloseq_TAN) < 1)
+sum(taxa_sums(ASV_16S_Phyloseq_TAN) < 1)
+```
+##Compare sequences per sample or ASV
+```{r Compare sequences per sample or ASV}
+readsumsdf = data.frame(nreads = sort(taxa_sums(ASV_16S_Phyloseq_TAN),TRUE), sorted = 1:ntaxa(ASV_16S_Phyloseq_TAN), type = "ASV")
+readsumsdf = rbind(readsumsdf,data.frame(nreads = sort(sample_sums(ASV_16S_Phyloseq_TAN),TRUE),sorted = 1:nsamples(ASV_16S_Phyloseq_TAN), type = "Samples"))
+
+title = "Total number of reads"
+
+p = ggplot(readsumsdf, aes(x = sorted, y = nreads)) +
+  geom_bar(stat = "identity")
+
+p + ggtitle(title) +
+  scale_y_log10() +
+  facet_wrap(~type, 1, scales = "free")
+```
+##Check Variables
+```{r What sample variables exist in the phyloseq data}
+sample_variables(ASV_16S_Phyloseq_TAN)
+sample_sums(ASV_16S_Phyloseq_TAN)
+```
+
+```{r Attached ASV ID}
+tax_table(ASV_16S_Phyloseq_TAN) <- cbind(tax_table(ASV_16S_Phyloseq_TAN), ASV=taxa_names(ASV_16S_Phyloseq_TAN))
+```
+##Resubset and check what samples remain after rarefaction
+```{r Resubset}
+ASV_16S_Phyloseq_TAN_v0 = ASV_16S_Phyloseq_TAN
+saveRDS(ASV_16S_Phyloseq_TAN_v0, "Corrected_phyloseq.rds")
+```
+
+```{r edge R}
+phyloseq_to_edgeR = function(physeq, group, method = "RLE", ...) {
+  require("edgeR")
+  require("phyloseq")
+  # Enforce orientation.
+  if (!taxa_are_rows(physeq)) {
+    physeq <- t(physeq)
+  }
+  x = as(otu_table(physeq), "matrix")
+  # Add one to protect against overflow, log(0) issues.
+  x = x + 1
+  # Check `group` argument
+  if (identical(all.equal(length(group), 1), TRUE) & nsamples(physeq) > 1) {
+    # Assume that group was a sample variable name (must be categorical)
+    group = get_variable(physeq, group)
+  }
+  # Define gene annotations (`genes`) as tax_table
+  taxonomy = tax_table(physeq, errorIfNULL=FALSE)
+  if( !is.null(taxonomy) ){
+    taxonomy = data.frame(as(taxonomy, "matrix"))
+  } 
+  # Now turn into a DGEList
+  y = DGEList(counts = x, group = group, genes = taxonomy, remove.zeros = TRUE, 
+              ...)
+  # Calculate the normalization factors
+  z = calcNormFactors(y, method = method)
+  # Check for division by zero inside `calcNormFactors`
+  if (!all(is.finite(z$samples$norm.factors))) {
+    stop("Something wrong with edgeR::calcNormFactors on this data,\n         non-finite $norm.factors, consider changing `method` argument")
+  }
+  # Estimate dispersions
+  return(estimateTagwiseDisp(estimateCommonDisp(z)))
+}
+
+```
+
+```{r Import and Subset}
+map_file_TAN <- paste("/Users/fenelladeans/OneDrive/Documents_2017/PhD/2019_Sequencing/2019_Sequencing/", "TAN1810_Map_reduced_gas.txt", sep = "")
+head(map_file_TAN)
+
+just_map_TAN <- paste("/Users/fenelladeans/OneDrive/Documents_2017/PhD/2019_Sequencing/2019_Sequencing/", "TAN1810_Map_reduced_gas.csv", sep = "")
+
+just_map_TAN<-read.csv(just_map_TAN, header = TRUE)
+head(just_map_TAN)
+
+bmsd_TAN <- import_qiime_sample_data(map_file_TAN)
+
+class(bmsd_TAN)
+dim(bmsd_TAN)
+sample_data(bmsd_TAN)
+sample_variables(bmsd_TAN)
+
+ASV_16S_Phyloseq_TAN
+ASV_16S_Phyloseq_TAN_v0
+
+Phyloseq_TAN <- merge_phyloseq(ASV_16S_Phyloseq_TAN, bmsd_TAN)
+Phyloseq_TAN
+```
+
+```{r Prune}
+###Remove OTUs that aren't present in at least one sample, confirm all taxa > 0
+Phyloseq_TAN_rm = prune_taxa(taxa_sums(Phyloseq_TAN) > 0, Phyloseq_TAN)
+any(taxa_sums(Phyloseq_TAN_rm)== 0)
+
+#Attach OTU name as taxonomy
+tax_table(Phyloseq_TAN_rm)<-cbind(tax_table(Phyloseq_TAN_rm),OTU=taxa_names(Phyloseq_TAN_rm))
+tax_table(Phyloseq_TAN_rm)
+```
+
+```{r Renaming}
+colnames(tax_table(Phyloseq_TAN_rm)) = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species", "ASV", "OTU")
+
+head(tax_table(Phyloseq_TAN_rm))
+
+Phyloseq_TAN_10  = transform_sample_counts(Phyloseq_TAN_rm, function(x) x / 10) 
+Phyloseq_TANr  = transform_sample_counts(Phyloseq_TAN_10, round )
+```
+
+```{r Renaming2}
+colnames(tax_table(Phyloseq_TAN_rm)) = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species", "ASV", "OTU")
+#This step deletes extra characters that indicate the taxonomic level. If you wish to plot class, family, genus, etc, you will need to repeat this step replacing replacing the number with the level you wish to remove. 
+tax_table(Phyloseq_TAN_rm) =gsub("D_0__", "", tax_table(Phyloseq_TAN_rm))
+tax_table(Phyloseq_TAN_rm) =gsub("D_1__", "", tax_table(Phyloseq_TAN_rm))
+tax_table(Phyloseq_TAN_rm) =gsub("D_2__", "", tax_table(Phyloseq_TAN_rm))
+tax_table(Phyloseq_TAN_rm) =gsub("D_3__", "", tax_table(Phyloseq_TAN_rm))
+tax_table(Phyloseq_TAN_rm) =gsub("D_4__", "", tax_table(Phyloseq_TAN_rm))
+tax_table(Phyloseq_TAN_rm) =gsub("D_5__", "", tax_table(Phyloseq_TAN_rm))
+tax_table(Phyloseq_TAN_rm) =gsub("D_6__", "", tax_table(Phyloseq_TAN_rm))
+tax_table(Phyloseq_TAN_rm) =gsub("D_7__", "", tax_table(Phyloseq_TAN_rm))
+tax_table(Phyloseq_TAN_rm) =gsub("D_8__", "", tax_table(Phyloseq_TAN_rm))
+tax_table(Phyloseq_TAN_rm) =gsub("D_9__", "", tax_table(Phyloseq_TAN_rm))
+tax_table(Phyloseq_TAN_rm) =gsub("D_10__", "", tax_table(Phyloseq_TAN_rm))
+tax_table(Phyloseq_TAN_rm) =gsub("D_11__", "", tax_table(Phyloseq_TAN_rm))
+
+colnames(tax_table(Phyloseq_TANr)) = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species","ASV", "OTU")
+#This step deletes extra characters that indicate the taxonomic level. If you wish to plot class, family, genus, etc, you will need to repeat this step replacing replacing the number with the level you wish to remove. 
+tax_table(Phyloseq_TANr) =gsub("D_0__", "", tax_table(Phyloseq_TANr))
+tax_table(Phyloseq_TANr) =gsub("D_1__", "", tax_table(Phyloseq_TANr))
+tax_table(Phyloseq_TANr) =gsub("D_2__", "", tax_table(Phyloseq_TANr))
+tax_table(Phyloseq_TANr) =gsub("D_3__", "", tax_table(Phyloseq_TANr))
+tax_table(Phyloseq_TANr) =gsub("D_4__", "", tax_table(Phyloseq_TANr))
+tax_table(Phyloseq_TANr) =gsub("D_5__", "", tax_table(Phyloseq_TANr))
+tax_table(Phyloseq_TANr) =gsub("D_6__", "", tax_table(Phyloseq_TANr))
+tax_table(Phyloseq_TANr) =gsub("D_7__", "", tax_table(Phyloseq_TANr))
+tax_table(Phyloseq_TANr) =gsub("D_8__", "", tax_table(Phyloseq_TANr))
+tax_table(Phyloseq_TANr) =gsub("D_9__", "", tax_table(Phyloseq_TANr))
+tax_table(Phyloseq_TANr) =gsub("D_10__", "", tax_table(Phyloseq_TANr))
+tax_table(Phyloseq_TANr) =gsub("D_11__", "", tax_table(Phyloseq_TANr))
+```
+##Phylum colour list
+```{r Colour lists}
+Phylum_colour_list_16S = c(
+  Actinobacteria = "red4",
+  Bacteroidetes = "red1",
+  Chloroflexi = "orange",
+  Cyanobacteria = "yellow",
+  Dadabacteria = "olivedrab1",
+  Dependentiae = "yellowgreen",
+  Euryarchaeota = "forestgreen", 
+  Lentisphaerae = "aquamarine4",
+  Firmicutes = "cyan3", 
+  Margulisbacteria = "blue2",
+  Margulisbacteriia = "blue2",
+  "Marinimicrobia_(SAR406_clade)" = "navyblue",
+  "Marinimicrobia (SAR406)" = "navyblue",
+  "Marinimicrobia (SAR406 clade) " = "navyblue", 
+  Patescibacteria = "purple3", 
+  Planctomycetes = "purple", 
+  Proteobacteria = "magenta2",
+  Thaumarchaeota = "magenta4",
+  "TM6 (Dependentiae)" = "hotpink",
+  Verrucomicrobia = "thistle2",
+  "Rare Taxa (<1%)" = "black")
+
+Class_colour_list <- c(Acidimicrobiia = "pink",
+                       Actinobacteria = "#966b88",
+                      Alphaproteobacteria = "magenta",
+                       Bacteroidia = "red", 
+                       Dadabacteriia = "orange",
+                      Deltaproteobacteria = "olivedrab1",
+                     Gammaproteobacteria = "green",
+                     Lentisphaeria = "#254d1f",
+                     Nitrososphaeria = "forestgreen",
+                     Oxyphotobacteria = "aquamarine3",
+                     Phycisphaerae = "#defdff",
+                     Planctomycetacia = "skyblue",
+                     Thermoplasmata = "blue",
+                     Verrucomicrobiae = "purple",
+                     "NA" = "black")
+
+
+positions = c("Salp Sc-SA","Non-salp SA", "Salp SA","Non-salp ST", "Salp ST") 
+
+Cycle_shape_list_WM = c("Salp Sc-SA" =15, "Salp SA"=16, "Non-salp ST"= 2, "Salp ST"=17, "Non-salp SA" = 1)
+Cycle_colour_list_WM = c("Salp Sc-SA" ="olivedrab3", "Salp SA"="dodgerblue2", "Non-salp ST"="orange", "Salp ST"="orange", "Non-salp SA" = "dodgerblue2")
+Cycle_fill_list_WM = c("Salp Sc-SA" ="#e2f2ac", "Salp SA"="#c7e8ff", "Non-salp ST"="white", "Salp ST"="#fff0bd", "Non-salp SA" = "white")
+```
+
+```{r Prune}
+###Remove OTUs that aren't present in at least one sample, confirm all taxa > 0
+Phyloseq_TAN_rm = prune_taxa(taxa_sums(Phyloseq_TAN) > 0, Phyloseq_TAN)
+any(taxa_sums(Phyloseq_TAN_rm)== 0)
+
+#Attach OTU name as taxonomy
+tax_table(Phyloseq_TAN_rm)<-cbind(tax_table(Phyloseq_TAN_rm),OTU=taxa_names(Phyloseq_TAN_rm))
+tax_table(Phyloseq_TAN_rm)
+Phyloseq_TAN_rm
+sample_data(Phyloseq_TAN_rm)
+```
+
+```{r Figure set-up}
+DO_label = expression(paste(plain('Dissolved oxygen (μmol '), plain('kg '^{-1}), plain(')') ))
+fl_label <- expression(paste(plain('Fluorescence (mg '), plain('m'^{3}), plain(')')))
+BPR_Prod_Label = expression(paste(plain('Bacterial Production (μg C '), plain('L '^{-1}), plain(' day '^{-1}), plain(')') ))
+PEuk_ml_Label <- expression(paste(plain("PEuk Abundance (cells "), plain("ml "^{-1}), plain(")")))
+Syn_ml_Label <- expression(paste(plain("Syn Abundance (cells "), plain("ml "^{-1}), plain(")")))
+HBact_ml_Label <- expression(paste(plain("Bacterial Abundance (cells "), plain("ml "^{-1}), plain(")")))
+Pico_ml_Label <- expression(paste(plain("Pico Abundance (cells "), plain("ml "^{-1}), plain(")")))
+Chla_label <- expression(paste(plain('Chlorophyll (mg '), plain('m'^{3}), plain(')') ))
+NO3_uM_label <- expression(paste(plain('Nitrate (μmol '), plain('l '^{-1}), plain(')') ))
+NH4_uM_label <- expression(paste(plain('Ammonium (μmol '), plain('l '^{-1}), plain(')') ))
+DRP_uM_label <- expression(paste(plain('Phosphate (μmol '), plain('l '^{-1}), plain(')') ))
+DRSi_uM_label <- expression(paste(plain('Silicate (μmol '), plain('l '^{-1}), plain(')') ))
+ZPDW_label <- expression(paste(plain('Zooplankton dry weight (g '), plain('m '^{-2}), plain(')')))
+SalpDW_label <- expression(paste(plain('Salp dry weight (g '), plain('m '^{-2}), plain(')')))
+SalpA_label <- expression(paste(plain('Salp abundance ('), plain('m '^{-2}), plain(')')))
+
+
+positions = c("Salp Sc-SA","Non-salp SA", "Salp SA","Non-salp ST", "Salp ST") 
+```
+
+##Figure 4.2 and Figure 4.3 and related statistics 
+
+```{r Oceanographic Conditions}
+OC_SalpScSA = subset(just_map_TAN, Cycle_word == "Salp Sc-SA")
+OC_SalpScSA$Cycle_word
+OC_SalpSA = subset(just_map_TAN, Cycle_word == "Salp SA")
+OC_SalpSA$Cycle_word
+OC_NSalpST = subset(just_map_TAN, Cycle_word == "Non-salp ST")
+OC_NSalpST$Cycle_word
+OC_SalpST = subset(just_map_TAN, Cycle_word == "Salp ST")
+OC_SalpST$Cycle_word
+OC_NSalpSA = subset(just_map_TAN, Cycle_word == "Non-salp SA")
+OC_NSalpSA$Cycle_word
+
+Mean_Salinity_All <- summarySE(just_map_TAN, measurevar="Salinity", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Salinity_SalpScSA <- summarySE(OC_SalpScSA, measurevar="Salinity", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Salinity_SalpSA <- summarySE(OC_SalpSA, measurevar="Salinity", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Salinity_NSalpST <- summarySE(OC_NSalpST, measurevar="Salinity", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Salinity_SalpST <- summarySE(OC_SalpST, measurevar="Salinity", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Salinity_NSalpSA <- summarySE(OC_NSalpSA, measurevar="Salinity", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Salinity_SalpScSA
+
+Salinity_plot_ScSA <- ggplot(Mean_Salinity_SalpScSA, aes(x=Depth, y=Salinity, group=Day))+
+  geom_point(aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Salinity_SalpSA, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Salinity_NSalpST, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Salinity_SalpST, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Salinity_NSalpSA, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_line(aes(colour=Cycle_word, group=Day), size=0.3)+
+ geom_line(data = Mean_Salinity_SalpSA, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Mean_Salinity_NSalpST, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Mean_Salinity_SalpST, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Mean_Salinity_NSalpSA, aes(colour=Cycle_word, group=Day), size=0.3)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab("Salinity (ppt)")+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(34, 35.35)+
+  xlim(155,0)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+Salinity_plot_ScSA
+
+Mean_Oxy_All <- summarySE(just_map_TAN, measurevar="Oxy", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Oxy_SalpScSA <- summarySE(OC_SalpScSA, measurevar="Oxy", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Oxy_SalpSA <- summarySE(OC_SalpSA, measurevar="Oxy", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Oxy_NSalpST <- summarySE(OC_NSalpST, measurevar="Oxy", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Oxy_SalpST <- summarySE(OC_SalpST, measurevar="Oxy", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Oxy_NSalpSA <- summarySE(OC_NSalpSA, measurevar="Oxy", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Oxy_SalpScSA
+
+Oxy_plot_ScSA <- ggplot(Mean_Oxy_SalpScSA, aes(x=Depth, y=Oxy, group=Day))+
+  geom_point(aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Oxy_SalpSA, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Oxy_NSalpST, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Oxy_SalpST, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Oxy_NSalpSA, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_line(aes(colour=Cycle_word, group=Day), size=0.3)+
+ geom_line(data = Mean_Oxy_SalpSA, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Mean_Oxy_NSalpST, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Mean_Oxy_SalpST, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Mean_Oxy_NSalpSA, aes(colour=Cycle_word, group=Day), size=0.3)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab(DO_label)+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(225, 310)+
+  xlim(155,0)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+Oxy_plot_ScSA
+
+head(just_map_TAN)
+
+Mean_Fl_All <- summarySE(just_map_TAN, measurevar="Fl", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Fl_SalpScSA <- summarySE(OC_SalpScSA, measurevar="Fl", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Fl_SalpSA <- summarySE(OC_SalpSA, measurevar="Fl", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Fl_NSalpST <- summarySE(OC_NSalpST, measurevar="Fl", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Fl_SalpST <- summarySE(OC_SalpST, measurevar="Fl", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Fl_NSalpSA <- summarySE(OC_NSalpSA, measurevar="Fl", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Fl_SalpScSA
+
+Fl_plot_ScSA <- ggplot(Mean_Fl_SalpScSA, aes(x=Depth, y=Fl, group=Day))+
+  geom_point(aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Fl_SalpSA, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Fl_NSalpST, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Fl_SalpST, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Fl_NSalpSA, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_line(aes(colour=Cycle_word, group=Day), size=0.3)+
+ geom_line(data = Mean_Fl_SalpSA, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Mean_Fl_NSalpST, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Mean_Fl_SalpST, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Mean_Fl_NSalpSA, aes(colour=Cycle_word, group=Day), size=0.3)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab(fl_label)+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(0, 3.5)+
+  xlim(155,0)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+Fl_plot_ScSA
+
+Mean_Temperature_All <- summarySE(just_map_TAN, measurevar="Temperature", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Temperature_SalpScSA <- summarySE(OC_SalpScSA, measurevar="Temperature", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Temperature_SalpSA <- summarySE(OC_SalpSA, measurevar="Temperature", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Temperature_NSalpST <- summarySE(OC_NSalpST, measurevar="Temperature", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Temperature_SalpST <- summarySE(OC_SalpST, measurevar="Temperature", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Temperature_NSalpSA <- summarySE(OC_NSalpSA, measurevar="Temperature", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Mean_Temperature_SalpScSA
+
+Temperature_plot_ScSA <- ggplot(Mean_Temperature_SalpScSA, aes(x=Depth, y=Temperature, group=Day))+
+  geom_point(aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Temperature_SalpSA, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Temperature_NSalpST, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Temperature_SalpST, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Mean_Temperature_NSalpSA, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_line(aes(colour=Cycle_word, group=Day), size=0.3)+
+ geom_line(data = Mean_Temperature_SalpSA, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Mean_Temperature_NSalpST, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Mean_Temperature_SalpST, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Mean_Temperature_NSalpSA, aes(colour=Cycle_word, group=Day), size=0.3)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab("Temperature (°C)")+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(7, 14.5)+
+  xlim(155,0)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+Temperature_plot_ScSA
+
+Ch4_Figure_4.2 <- Temperature_plot_ScSA + ggtitle("a") +
+  Salinity_plot_ScSA + ggtitle("b") + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank())+
+  Oxy_plot_ScSA + ggtitle("c") +
+  Fl_plot_ScSA + ggtitle("d") + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank())+
+  plot_layout(guides = 'collect',ncol = 2)
+Ch4_Figure_4.2
+
+ggsave(
+  "Ch4_Figure_4.2.png",
+  width =13,
+  height = 12,
+  units = c("in"),
+  dpi = 300,
+  limitsize = TRUE
+)
+```
+
+```{r Nutrient Plots }
+N_TAN <- paste("/Users/fenelladeans/OneDrive/Documents_2017/PhD/TAN1810_All/", "TAN1810_Nutrients_CSV.csv", sep = "")
+
+N_TAN<-read.csv(N_TAN, header=TRUE)
+head(N_TAN)
+
+N_TAN$Cycle_Word
+N_SalpScSA = subset(N_TAN, Cycle_Word == "Salp Sc-SA")
+N_SalpScSA$Cycle_Word
+N_SalpSA = subset(N_TAN, Cycle_Word == "Salp SA")
+N_SalpSA$Cycle_Word
+N_NSalpST = subset(N_TAN, Cycle_Word == "Non-salp ST")
+N_NSalpST$Cycle_Word
+N_SalpST = subset(N_TAN, Cycle_Word == "Salp ST")
+N_SalpST$Cycle_Word
+N_NSalpSA = subset(N_TAN, Cycle_Word == "Non-salp SA")
+N_NSalpSA$Cycle_Word
+
+NH4_uM_SalpScSA <- summarySE(N_SalpScSA, measurevar="NH4_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+NH4_uM_SalpSA <- summarySE(N_SalpSA, measurevar="NH4_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+NH4_uM_NSalpST <- summarySE(N_NSalpST, measurevar="NH4_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+NH4_uM_SalpST <- summarySE(N_SalpST, measurevar="NH4_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+NH4_uM_NSalpSA <- summarySE(N_NSalpSA, measurevar="NH4_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+
+NH4_uM_plot_ScSA <- ggplot(NH4_uM_SalpScSA, aes(x=Depth, y=NH4_uM))+
+  geom_point(aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = NH4_uM_SalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = NH4_uM_NSalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = NH4_uM_SalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = NH4_uM_NSalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_line(aes(colour=Cycle_Word), size=0.3)+
+ geom_line(data = NH4_uM_SalpSA, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = NH4_uM_NSalpST, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = NH4_uM_SalpST, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = NH4_uM_NSalpSA, aes(colour=Cycle_Word), size=0.3)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab(NH4_uM_label)+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(0, 0.8)+
+  xlim(105,0)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+NH4_uM_plot_ScSA
+
+NH4_uM_SalpScSA <- summarySE(N_SalpScSA, measurevar="NH4_uM", groupvars=c("Cycle_Word", "Depth", "CTD_number"), na.rm = TRUE)
+NH4_uM_SalpSA <- summarySE(N_SalpSA, measurevar="NH4_uM", groupvars=c("Cycle_Word", "Depth", "CTD_number"), na.rm = TRUE)
+NH4_uM_NSalpST <- summarySE(N_NSalpST, measurevar="NH4_uM", groupvars=c("Cycle_Word", "Depth", "CTD_number"), na.rm = TRUE)
+NH4_uM_SalpST <- summarySE(N_SalpST, measurevar="NH4_uM", groupvars=c("Cycle_Word", "Depth", "CTD_number"), na.rm = TRUE)
+NH4_uM_NSalpSA <- summarySE(N_NSalpSA, measurevar="NH4_uM", groupvars=c("Cycle_Word", "Depth", "CTD_number"), na.rm = TRUE)
+
+NO3_uM_SalpScSA <- summarySE(N_SalpScSA, measurevar="NO3_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+NO3_uM_SalpSA <- summarySE(N_SalpSA, measurevar="NO3_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+NO3_uM_NSalpST <- summarySE(N_NSalpST, measurevar="NO3_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+NO3_uM_SalpST <- summarySE(N_SalpST, measurevar="NO3_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+NO3_uM_NSalpSA <- summarySE(N_NSalpSA, measurevar="NO3_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+
+NO3_uM_plot_ScSA <- ggplot(NO3_uM_SalpScSA, aes(x=Depth, y=NO3_uM))+
+  geom_point(aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = NO3_uM_SalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = NO3_uM_NSalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = NO3_uM_SalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = NO3_uM_NSalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_line(aes(colour=Cycle_Word), size=0.3)+
+ geom_line(data = NO3_uM_SalpSA, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = NO3_uM_NSalpST, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = NO3_uM_SalpST, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = NO3_uM_NSalpSA, aes(colour=Cycle_Word), size=0.3)+
+    geom_errorbar(aes(ymin = (NO3_uM - se), ymax = (NO3_uM + se), colour=Cycle_Word), width=0)+
+    geom_errorbar(data = NO3_uM_SalpSA, aes(ymin = (NO3_uM - se), ymax = (NO3_uM + se), colour=Cycle_Word), width=0)+
+    geom_errorbar(data = NO3_uM_NSalpST, aes(ymin = (NO3_uM - se), ymax = (NO3_uM + se), colour=Cycle_Word), width=0)+
+    geom_errorbar(data = NO3_uM_SalpST, aes(ymin = (NO3_uM - se), ymax = (NO3_uM + se), colour=Cycle_Word), width=0)+
+    geom_errorbar(data = NO3_uM_NSalpSA, aes(ymin = (NO3_uM - se), ymax = (NO3_uM + se), colour=Cycle_Word), width=0)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab(NO3_uM_label)+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(0, 4)+
+  xlim(105,0)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+NO3_uM_plot_ScSA
+
+DRSi_uM_SalpScSA <- summarySE(N_SalpScSA, measurevar="DRSi_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+DRSi_uM_SalpSA <- summarySE(N_SalpSA, measurevar="DRSi_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+DRSi_uM_NSalpST <- summarySE(N_NSalpST, measurevar="DRSi_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+DRSi_uM_SalpST <- summarySE(N_SalpST, measurevar="DRSi_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+DRSi_uM_NSalpSA <- summarySE(N_NSalpSA, measurevar="DRSi_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+
+DRSi_uM_plot_ScSA <- ggplot(DRSi_uM_SalpScSA, aes(x=Depth, y=DRSi_uM))+
+  geom_point(aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = DRSi_uM_SalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = DRSi_uM_NSalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = DRSi_uM_SalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = DRSi_uM_NSalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_line(aes(colour=Cycle_Word), size=0.3)+
+ geom_line(data = DRSi_uM_SalpSA, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = DRSi_uM_NSalpST, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = DRSi_uM_SalpST, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = DRSi_uM_NSalpSA, aes(colour=Cycle_Word), size=0.3)+
+    geom_errorbar(aes(ymin = (DRSi_uM - se), ymax = (DRSi_uM + se), colour=Cycle_Word), width=0)+
+    geom_errorbar(data = DRSi_uM_SalpSA, aes(ymin = (DRSi_uM - se), ymax = (DRSi_uM + se), colour=Cycle_Word), width=0)+
+    geom_errorbar(data = DRSi_uM_NSalpST, aes(ymin = (DRSi_uM - se), ymax = (DRSi_uM + se), colour=Cycle_Word), width=0)+
+    geom_errorbar(data = DRSi_uM_SalpST, aes(ymin = (DRSi_uM - se), ymax = (DRSi_uM + se), colour=Cycle_Word), width=0)+
+    geom_errorbar(data = DRSi_uM_NSalpSA, aes(ymin = (DRSi_uM - se), ymax = (DRSi_uM + se), colour=Cycle_Word), width=0)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab(DRSi_uM_label)+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(0, 3.2)+
+  xlim(105,0)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+DRSi_uM_plot_ScSA
+
+DRP_uM_SalpScSA <- summarySE(N_SalpScSA, measurevar="DRP_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+DRP_uM_SalpSA <- summarySE(N_SalpSA, measurevar="DRP_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+DRP_uM_NSalpST <- summarySE(N_NSalpST, measurevar="DRP_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+DRP_uM_SalpST <- summarySE(N_SalpST, measurevar="DRP_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+DRP_uM_NSalpSA <- summarySE(N_NSalpSA, measurevar="DRP_uM", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+
+DRP_uM_plot_ScSA <- ggplot(DRP_uM_SalpScSA, aes(x=Depth, y=DRP_uM))+
+  geom_point(aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = DRP_uM_SalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = DRP_uM_NSalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = DRP_uM_SalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = DRP_uM_NSalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_line(aes(colour=Cycle_Word), size=0.3)+
+ geom_line(data = DRP_uM_SalpSA, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = DRP_uM_NSalpST, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = DRP_uM_SalpST, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = DRP_uM_NSalpSA, aes(colour=Cycle_Word), size=0.3)+
+    geom_errorbar(aes(ymin = (DRP_uM - se), ymax = (DRP_uM + se), colour=Cycle_Word), width=0)+
+    geom_errorbar(data = DRP_uM_SalpSA, aes(ymin = (DRP_uM - se), ymax = (DRP_uM + se), colour=Cycle_Word), width=0)+
+    geom_errorbar(data = DRP_uM_NSalpST, aes(ymin = (DRP_uM - se), ymax = (DRP_uM + se), colour=Cycle_Word), width=0)+
+    geom_errorbar(data = DRP_uM_SalpST, aes(ymin = (DRP_uM - se), ymax = (DRP_uM + se), colour=Cycle_Word), width=0)+
+    geom_errorbar(data = DRP_uM_NSalpSA, aes(ymin = (DRP_uM - se), ymax = (DRP_uM + se), colour=Cycle_Word), width=0)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab(DRP_uM_label)+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(0, 0.4)+
+  xlim(105,0)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+DRP_uM_plot_ScSA
+
+
+Ch4_Figure_4.3 <- Chla_plot_ScSA + ggtitle("a") + theme(legend.position = "none") +
+  NO3_uM_plot_ScSA + ggtitle("b") + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank())+ theme(legend.position = "none") +
+  NH4_uM_plot_ScSA + ggtitle("c") + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank())+theme(legend.position = "none") +
+  DRP_uM_plot_ScSA + ggtitle("d") + theme(legend.position = "none") +
+  DRSi_uM_plot_ScSA + ggtitle("e") + theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank())+
+plot_layout(guides = 'collect', ncol = 3)
+  
+Ch4_Figure_4.3
+
+ggsave(
+  "Ch4_Figure_4.3.png",
+  width =14,
+  height = 12,
+  units = c("in"),
+  dpi = 300,
+  limitsize = TRUE
+  )
+
+```
+
+##Figure 4.4 and related statistics 
+
+```{r Bacterial production (BPR) stats }
+positions = c("Salp Sc-SA","Non-salp SA", "Salp SA","Non-salp ST", "Salp ST") 
+
+options(na.action = na.omit)
+
+Mean_BPR_1 <- summarySE(just_map_TAN, measurevar="BPR", groupvars=c("Cycle_word"), na.rm = TRUE)
+Mean_BPR_1
+
+just_map_TAN$Cycle_Word <- just_map_TAN$Cycle_word
+
+Ch4_Simple_BPR <- ggplot(just_map_TAN, aes(x=Cycle_word, y=BPR))+
+  geom_boxplot(aes(colour=Cycle_Word), size=1)+
+  geom_boxplot(aes(fill=Cycle_Word, colour=Cycle_Word))+
+  scale_fill_manual(values=Cycle_fill_list_WM,limits=positions)+
+  xlab("Cycle")+
+  ylab(BPR_Prod_Label)+
+  labs(fill="Cycle")+
+  labs(colour="Cycle")+
+  theme_bw()+
+  scale_colour_manual(values=Cycle_colour_list_WM,limits=positions)+
+    scale_x_discrete(limits=positions)+labs(limits=positions)+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+Ch4_Simple_BPR
+
+head(just_map_TAN)
+Mean_BPR <- summarySE(just_map_TAN, measurevar="BPR", groupvars=c("Cycle_word"), na.rm = TRUE)
+Mean_BPR
+
+Mean_BPR <- summarySE(just_map_TAN, measurevar="Hbact_ml", groupvars=c("Cycle_word"), na.rm = TRUE)
+Mean_BPR
+
+BPR_plot <- ggplot(Mean_BPR, aes(x=as.factor(Cycle_word), y=BPR))+ geom_bar(stat = "identity")+ xlab("Cycle")+ylab(BPR_Prod_Label)
+
+OC_SalpScSA$Cycle_Word <- OC_SalpScSA$Cycle_word
+OC_SalpSA$Cycle_Word <- OC_SalpSA$Cycle_word
+OC_NSalpST$Cycle_Word <- OC_NSalpST$Cycle_word
+OC_SalpST$Cycle_Word <- OC_SalpST$Cycle_word
+OC_NSalpSA$Cycle_Word <- OC_NSalpSA$Cycle_word
+
+Mean_BPR_SalpScSA <- summarySE(OC_SalpScSA, measurevar="BPR", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_BPR_SalpSA <- summarySE(OC_SalpSA, measurevar="BPR", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_BPR_NSalpST <- summarySE(OC_NSalpST, measurevar="BPR", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_BPR_SalpST <- summarySE(OC_SalpST, measurevar="BPR", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_BPR_NSalpSA <- summarySE(OC_NSalpSA, measurevar="BPR", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+
+BPR_plot_ScSA <- ggplot(Mean_BPR_SalpScSA, aes(x=Depth, y=as.numeric(BPR), group=Day))+
+  geom_point(aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_BPR_SalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_BPR_NSalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_BPR_SalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_BPR_NSalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_line(aes(colour=Cycle_Word, group=Day), size=0.3)+
+ geom_line(data = Mean_BPR_SalpSA, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_BPR_NSalpST, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_BPR_SalpST, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_BPR_NSalpSA, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab(BPR_Prod_Label)+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(0, 2.5)+
+  xlim(155,0)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+BPR_plot_ScSA
+
+head(just_map_TAN)
+just_map_TAN$BPR #Hbact_ml
+just_map_TAN_SA <- subset(just_map_TAN, WaterMass == "SA")
+just_map_TAN_SA
+just_map_TAN_ST <- subset(just_map_TAN, WaterMass == "ST")
+just_map_TAN_ST
+
+summary(lm(BPR ~ Salps, data = just_map_TAN_SA))
+summary(lm(Hbact_ml ~ Salps, data = just_map_TAN_SA))
+
+kruskal.test(BPR ~ Salps, data = just_map_TAN_SA)
+kruskal.test(Hbact_ml ~ Salps, data = just_map_TAN_SA)
+
+summary(lm(BPR ~ Salps, data = just_map_TAN_ST))
+summary(lm(Hbact_ml ~ Salps, data = just_map_TAN_ST))
+
+kruskal.test(BPR ~ Salps, data = just_map_TAN_ST)
+kruskal.test(Hbact_ml ~ Salps, data = just_map_TAN_ST)
+
+summary(lm(BPR ~ Salps, data = just_map_TAN))
+summary(lm(Hbact_ml ~ Salps, data = just_map_TAN))
+```
+
+```{r Flow cyt}
+head(OC_SalpScSA)
+summary(OC_SalpScSA$Hbact_ml, na.rm = TRUE)
+summary(OC_SalpSA$Hbact_ml, na.rm = TRUE)
+summary(OC_NSalpST$Hbact_ml, na.rm = TRUE)
+summary(OC_SalpST$Hbact_ml, na.rm = TRUE)
+summary(OC_NSalpSA$Hbact_ml, na.rm = TRUE)
+
+PEuk_ml_Label <- expression(paste(plain("PEuk Abundance (cells "), plain("ml "^{-1}), plain(")")))
+Syn_ml_Label <- expression(paste(plain("Syn Abundance (cells "), plain("ml "^{-1}), plain(")")))
+HBact_ml_Label <- expression(paste(plain("Bacterial Abundance (cells "), plain("ml "^{-1}), plain(")")))
+Pico_ml_Label <- expression(paste(plain("Pico Abundance (cells "), plain("ml "^{-1}), plain(")")))
+
+Mean_PEuk_ml_SalpScSA <- summarySE(OC_SalpScSA, measurevar="PEuk_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_PEuk_ml_SalpSA <- summarySE(OC_SalpSA, measurevar="PEuk_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_PEuk_ml_NSalpST <- summarySE(OC_NSalpST, measurevar="PEuk_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_PEuk_ml_SalpST <- summarySE(OC_SalpST, measurevar="PEuk_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_PEuk_ml_NSalpSA <- summarySE(OC_NSalpSA, measurevar="PEuk_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_PEuk_ml_SalpScSA
+
+PEuk_ml_plot_ScSA <- ggplot(Mean_PEuk_ml_SalpScSA, aes(x=Depth, y=PEuk_ml, group=Day))+
+  geom_point(aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_PEuk_ml_SalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_PEuk_ml_NSalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_PEuk_ml_SalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_PEuk_ml_NSalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_line(aes(colour=Cycle_Word, group=Day), size=0.3)+
+ geom_line(data = Mean_PEuk_ml_SalpSA, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_PEuk_ml_NSalpST, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_PEuk_ml_SalpST, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_PEuk_ml_NSalpSA, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab(PEuk_ml_Label)+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(0, 60000)+
+  xlim(155,0)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+PEuk_ml_plot_ScSA
+
+Syn_ml_Label <- expression(paste(plain("Syn Abundance (cells "), plain("ml "^{-1}), plain(")")))
+HBact_ml_Label <- expression(paste(plain("Bacterial Abundance (cells "), plain("ml "^{-1}), plain(")")))
+Pico_ml_Label <- expression(paste(plain("Pico Abundance (cells "), plain("ml "^{-1}), plain(")")))
+
+Mean_Syn_ml_SalpScSA <- summarySE(OC_SalpScSA, measurevar="Syn_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Syn_ml_SalpSA <- summarySE(OC_SalpSA, measurevar="Syn_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Syn_ml_NSalpST <- summarySE(OC_NSalpST, measurevar="Syn_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Syn_ml_SalpST <- summarySE(OC_SalpST, measurevar="Syn_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Syn_ml_NSalpSA <- summarySE(OC_NSalpSA, measurevar="Syn_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Syn_ml_SalpScSA
+
+Syn_ml_plot_ScSA <- ggplot(Mean_Syn_ml_SalpScSA, aes(x=Depth, y=Syn_ml, group=Day))+
+  geom_point(aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Syn_ml_SalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Syn_ml_NSalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Syn_ml_SalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Syn_ml_NSalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_line(aes(colour=Cycle_Word, group=Day), size=0.3)+
+ geom_line(data = Mean_Syn_ml_SalpSA, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_Syn_ml_NSalpST, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_Syn_ml_SalpST, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_Syn_ml_NSalpSA, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab(Syn_ml_Label)+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(0, 220000)+
+  xlim(155,0)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+Syn_ml_plot_ScSA
+
+HBact_ml_Label <- expression(paste(plain("Bacterial Abundance (cells "), plain("ml "^{-1}), plain(")")))
+Pico_ml_Label <- expression(paste(plain("Pico Abundance (cells "), plain("ml "^{-1}), plain(")")))
+
+Mean_Pico_ml_SalpScSA <- summarySE(OC_SalpScSA, measurevar="Pico_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Pico_ml_SalpSA <- summarySE(OC_SalpSA, measurevar="Pico_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Pico_ml_NSalpST <- summarySE(OC_NSalpST, measurevar="Pico_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Pico_ml_SalpST <- summarySE(OC_SalpST, measurevar="Pico_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Pico_ml_NSalpSA <- summarySE(OC_NSalpSA, measurevar="Pico_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Pico_ml_SalpScSA
+
+Pico_ml_plot_ScSA <- ggplot(Mean_Pico_ml_SalpScSA, aes(x=Depth, y=Pico_ml, group=Day))+
+  geom_point(aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Pico_ml_SalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Pico_ml_NSalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Pico_ml_SalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Pico_ml_NSalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_line(aes(colour=Cycle_Word, group=Day), size=0.3)+
+ geom_line(data = Mean_Pico_ml_SalpSA, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_Pico_ml_NSalpST, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_Pico_ml_SalpST, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_Pico_ml_NSalpSA, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab(Pico_ml_Label)+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(0, 3400000)+
+  xlim(155,0)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+Pico_ml_plot_ScSA
+
+HBact_ml_Label <- expression(paste(plain("Bacterial Abundance (cells "), plain("ml "^{-1}), plain(")")))
+
+Mean_Hbact_ml_SalpScSA <- summarySE(OC_SalpScSA, measurevar="Hbact_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Hbact_ml_SalpSA <- summarySE(OC_SalpSA, measurevar="Hbact_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Hbact_ml_NSalpST <- summarySE(OC_NSalpST, measurevar="Hbact_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Hbact_ml_SalpST <- summarySE(OC_SalpST, measurevar="Hbact_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Hbact_ml_NSalpSA <- summarySE(OC_NSalpSA, measurevar="Hbact_ml", groupvars=c("Cycle_Word", "Depth", "Day"), na.rm = TRUE)
+Mean_Hbact_ml_SalpScSA
+
+Hbact_ml_plot_ScSA <- ggplot(Mean_Hbact_ml_SalpScSA, aes(x=Depth, y=Hbact_ml, group=Day))+
+  geom_point(aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Hbact_ml_SalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Hbact_ml_NSalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Hbact_ml_SalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Hbact_ml_NSalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_line(aes(colour=Cycle_Word, group=Day), size=0.3)+
+ geom_line(data = Mean_Hbact_ml_SalpSA, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_Hbact_ml_NSalpST, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_Hbact_ml_SalpST, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  geom_line(data = Mean_Hbact_ml_NSalpSA, aes(colour=Cycle_Word, group=Day), size=0.3)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab(HBact_ml_Label)+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(0, 3400000)+
+  xlim(155,0)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+
+Hbact_ml_plot_ScSA
+
+kruskal.test(Hbact_ml ~ Cycle_word, data = just_map_TAN) 
+dunnTest(Hbact_ml ~ Cycle_word, data = just_map_TAN) 
+
+kruskal.test(BPR ~ Cycle_word, data = just_map_TAN) 
+dunnTest(BPR ~ Cycle_word, data = just_map_TAN) 
+
+kruskal.test(Hbact_ml ~ Salps, data = just_map_TAN) 
+dunnTest(Hbact_ml ~ Salps, data = just_map_TAN)  
+
+kruskal.test(Hbact_ml ~ WaterMass, data = just_map_TAN)
+dunnTest(Hbact_ml ~ WaterMass, data = just_map_TAN) 
+
+```
+
+```{r BPR and Bact Plots}
+Mean_Hbact_ml_SalpScSA <- summarySE(OC_SalpScSA, measurevar="Hbact_ml", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+Mean_Hbact_ml_SalpSA <- summarySE(OC_SalpSA, measurevar="Hbact_ml", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+Mean_Hbact_ml_NSalpST <- summarySE(OC_NSalpST, measurevar="Hbact_ml", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+Mean_Hbact_ml_SalpST <- summarySE(OC_SalpST, measurevar="Hbact_ml", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+Mean_Hbact_ml_NSalpSA <- summarySE(OC_NSalpSA, measurevar="Hbact_ml", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+Mean_Hbact_ml_SalpScSA
+
+Hbact_ml_plot <- ggplot(Mean_Hbact_ml_SalpScSA, aes(x=Depth, y=Hbact_ml))+
+  geom_point(aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Hbact_ml_SalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Hbact_ml_NSalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Hbact_ml_SalpST, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_point(data = Mean_Hbact_ml_NSalpSA, aes(colour=Cycle_Word, shape=Cycle_Word),size=3)+
+  geom_line(aes(colour=Cycle_Word), size=0.3)+
+ geom_line(data = Mean_Hbact_ml_SalpSA, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = Mean_Hbact_ml_NSalpST, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = Mean_Hbact_ml_SalpST, aes(colour=Cycle_Word), size=0.3)+
+  geom_line(data = Mean_Hbact_ml_NSalpSA, aes(colour=Cycle_Word), size=0.3)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab(HBact_ml_Label)+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(0, 2700000)+
+  xlim(155,0)+
+  #geom_hline(yintercept=100,colour="black",linetype = 2)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+Hbact_ml_plot
+
+Mean_BPR_SalpScSA <- summarySE(OC_SalpScSA, measurevar="BPR", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+Mean_BPR_SalpSA <- summarySE(OC_SalpSA, measurevar="BPR", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+Mean_BPR_NSalpST <- summarySE(OC_NSalpST, measurevar="BPR", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+Mean_BPR_SalpST <- summarySE(OC_SalpST, measurevar="BPR", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+Mean_BPR_NSalpSA <- summarySE(OC_NSalpSA, measurevar="BPR", groupvars=c("Cycle_Word", "Depth"), na.rm = TRUE)
+Mean_BPR_SalpScSA
+
+
+Ch4_Simple_Hbact_ml <- ggplot(just_map_TAN, aes(x=Cycle_word, y=Hbact_ml))+
+  geom_boxplot(aes(colour=Cycle_Word), size=1)+
+  geom_boxplot(aes(fill=Cycle_Word, colour=Cycle_Word))+
+  scale_fill_manual(values=Cycle_fill_list_WM,limits=positions)+
+  xlab("Cycle")+
+  ylab(HBact_ml_Label)+
+  labs(fill="Cycle")+
+  labs(colour="Cycle")+
+  theme_bw()+
+  scale_colour_manual(values=Cycle_colour_list_WM,limits=positions)+
+    scale_x_discrete(limits=positions)+labs(limits=positions)+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+Ch4_Simple_Hbact_ml
+
+Ch4_Figure_4.4 <- Ch4_Simple_Hbact_ml + 
+  theme(legend.position = "none")+
+  ggtitle("a") +
+  Hbact_ml_plot_ScSA +
+  theme(legend.position = "none")+
+  ggtitle("b") +
+  Ch4_Simple_BPR+
+  ggtitle("c") +
+  BPR_plot_ScSA+
+  ggtitle("d") +
+  plot_layout(guides = 'collect', ncol = 2)
+Ch4_Figure_4.4
+
+ggsave(
+  "Ch4_Figure_4.4.png",
+  width =14,
+  height = 12,
+  units = c("in"),
+  dpi = 300,
+  limitsize = TRUE
+)
+```
+
+```{r BPR plots and stats}
+ggplot(Mean_BPR, aes(x=Depth, y=BPR, group=Cycle_word))+
+  geom_point(aes(colour=Cycle_word, shape=Cycle_word),size=3)
+  
+kruskal.test(BPR ~ WaterMass, data = just_map_TAN)
+dunnTest(BPR ~ WaterMass, data = just_map_TAN)
+
+kruskal.test(BPR ~ Cycle_word, data = just_map_TAN) 
+dunnTest(BPR ~ Cycle_word, data = just_map_TAN)
+
+kruskal.test(BPR ~ Salps, data = just_map_TAN) 
+kruskal.test(BPR ~ as.numeric(Depth), data = just_map_TAN) 
+
+just_map_TAN$Depth <- as.numeric(just_map_TAN$Depth)
+
+cor.test(just_map_TAN$BPR, just_map_TAN$Depth, method=c("spearman"))
+
+just_map_TAN
+lm <- lm(BPR ~ Depth, data=just_map_TAN)
+summary(lm)
+plot(lm)
+
+just_map_TAN
+summary(lm(N2O_Sat ~ BPR, data=just_map_TAN))
+summary(lm(CH4_Sat ~ BPR, data=just_map_TAN) )
+summary(lm(AOU_New_Full ~ BPR, data=just_map_TAN))
+summary(lm(N2O_Sat ~ Hbact_ml, data=just_map_TAN))
+summary(lm(CH4_Sat ~ Hbact_ml, data=just_map_TAN))
+summary(lm(AOU_New_Full ~ Hbact_ml, data=just_map_TAN)) 
+summary(lm(BPR ~ Hbact_ml, data=just_map_TAN))
+
+
+just_map_TAN$Cycle_word
+df_SalpScSA = just_map_TAN[-c(45:143),]
+df_SalpScSA$Cycle_word
+summary(df_SalpScSA$BPR)
+
+df_SalpSA = just_map_TAN[-c(1:44, 75:143),]
+df_SalpSA$Cycle_word
+summary(df_SalpSA$BPR)
+
+df_NSalpST = just_map_TAN[-c(1:74, 99:143),]
+df_NSalpST$Cycle_word
+summary(df_NSalpST$BPR)
+
+df_SalpST = just_map_TAN[-c(1:98, 119:143),]
+df_SalpST$Cycle_word
+summary(df_SalpST$BPR)
+
+df_NSalpSA = just_map_TAN[-c(1:118),]
+df_NSalpSA$Cycle_word
+summary(df_NSalpSA$BPR)
+
+just_SA_TAN = just_map_TAN[-c(1:44, 75:118),]
+just_SA_TAN$Cycle_word
+summary(just_SA_TAN$BPR)
+
+just_ST_TAN = just_map_TAN[-c(1:74, 119:143),]
+just_ST_TAN$Cycle_word
+summary(just_ST_TAN$BPR)
+
+
+summary(lm(BPR ~ Depth, data=just_map_TAN))
+summary(lm(BPR ~ Depth, data=df_SalpScSA))
+summary(lm(BPR ~ Depth, data=df_SalpSA))
+summary(lm(BPR ~ Depth, data=df_NSalpST))
+summary(lm(BPR ~ Depth, data=df_SalpST))
+summary(lm(BPR ~ Depth, data=df_NSalpSA))
+
+
+aov <- aov(BPR ~ WaterMass*Salps*Depth, data=just_map_TAN)
+summary(aov)
+
+lm <- lm(BPR ~ Cycle_word, data=just_map_TAN)
+summary(lm)
+
+lm <- lm(BPR ~ Salps, data=just_map_TAN)
+summary(lm)
+
+lm <- lm(BPR ~ Salps, data=just_SA_TAN)
+summary(lm) 
+
+lm <- lm(BPR ~ Salps, data=just_ST_TAN)
+summary(lm) 
+lm <- lmerTest::lmer(BPR ~ WaterMass + (1|Depth), data=just_map_TAN)
+summary(lm) 
+
+lm <- lmerTest::lmer(BPR ~ Salps + (1|Depth), data=just_map_TAN)
+summary(lm) 
+
+lm <- lmerTest::lmer(BPR ~ Salps + (1|WaterMass) + (1|Depth), data=just_map_TAN)
+summary(lm) 
+
+lm <- lmerTest::lmer(BPR ~ Salps + (1|Depth), data=just_ST_TAN)
+summary(lm) 
+lm <- lmerTest::lmer(BPR ~ Salps + (1|Depth), data=just_SA_TAN)
+summary(lm)  
+
+lm <- lmerTest::lmer(BPR ~ Salp_Sum_gm2 + (1|Depth), data=just_ST_TAN)
+summary(lm) 
+lm <- lmerTest::lmer(BPR ~ Salp_Sum_gm2 + (1|Depth), data=just_SA_TAN)
+summary(lm) 
+
+lm <- lm(BPR ~ WaterMass, data=just_map_TAN)
+summary(lm)
+
+lm <- lm(BPR ~ Salps*WaterMass*Depth, data=just_map_TAN)
+summary(lm)
+
+lm <- lm(BPR ~ Depth, data=just_map_TAN)
+summary(lm)
+
+lm <- lm(BPR ~ Salp_Sum_gm2, data=just_map_TAN)
+summary(lm)
+
+just_map_TAN$Depth <- as.numeric(just_map_TAN$Depth)
+
+
+lmer <- lmerTest::lmer(BPR ~ Salp_Sum_gm2+WaterMass+(1|Depth), data=just_map_TAN)
+summary(lmer) 
+lmer
+AICc(lmer) 
+confint(lmer)
+anova(lmer) 
+r.squaredGLMM(lmer) 
+plot(lmer)
+
+
+lmer <- glmer(BPR ~ Salp_Sum_gm2+WaterMass+NDW_SUM_gm2+NPP+SumSFChla+DRP_uM+NH4_uM+NO3_uM+DRSi_uM+(1|Depth), data=just_map_TAN)
+summary(lmer) 
+lmer
+AICc(lmer) 
+confint(lmer) 
+anova(lmer) 
+r.squaredGLMM(lmer) 
+
+
+lmer <- lmer(BPR ~ WaterMass+(1|Depth), data=just_map_TAN)
+summary(lmer) 
+lmer
+AICc(lmer) 
+confint(lmer) 
+anova(lmer) 
+r.squaredGLMM(lmer) 
+```
+
+```{r Bacterial abundance plots and stats}
+range(just_map_TAN$Hbact_ml, na.rm=TRUE)
+just_map_TAN
+
+ggplot(just_map_TAN, aes(x=Depth, y=Hbact_ml, group=Cycle_word))+
+  geom_point(aes(colour=Cycle_word, shape=Cycle_word),size=3)
+  
+kruskal.test(Hbact_ml ~ WaterMass, data = just_map_TAN) #p-value = 0.007366
+kruskal.test(Hbact_ml ~ Cycle_word, data = just_map_TAN) #p-value = 0.0001825
+kruskal.test(Hbact_ml ~ Salps, data = just_map_TAN) #p-value = 0.0198
+kruskal.test(Hbact_ml ~ as.numeric(Depth), data = just_map_TAN) #p-value = 8.801e-05
+
+just_map_TAN$Depth <- as.numeric(just_map_TAN$Depth)
+
+#install.packages("FSA") #dunnTest
+library(FSA)
+
+dunnTest(Hbact_ml ~ WaterMass, data = just_map_TAN) # ST diff from others
+dunnTest(Hbact_ml~ Cycle_word, data = just_map_TAN) # Non-salp SA - Salp SA p=0.0234672511, Non-salp SA - Salp ST p=0.0001057216, Salp Sc-SA - Salp ST = 0.0107314945
+
+
+aov <- aov(Hbact_ml ~ Cycle_word*Depth, data=just_map_TAN)
+summary(aov) #all sig incl interaction ***
+
+aov <- aov(Hbact_ml ~ Salps*Depth, data=just_map_TAN)
+summary(aov) #depth***, salps** sig but not interaction
+
+aov <- aov(Hbact_ml ~ Depth, data=just_map_TAN)
+summary(aov) # ***
+
+just_map_TAN
+lm <- lm(Hbact_ml ~ Depth, data=just_map_TAN)
+summary(lm) # ***
+plot(lm)
+
+just_map_TAN$Cycle_word
+df_SalpScSA = just_map_TAN[-c(45:144),]
+df_SalpScSA$Cycle_word
+df_SalpSA = just_map_TAN[-c(1:44, 75:144),]
+df_SalpSA$Cycle_word
+df_NSalpST = just_map_TAN[-c(1:74, 99:144),]
+df_NSalpST$Cycle_word
+df_SalpST = just_map_TAN[-c(1:98, 119:144),]
+df_SalpST$Cycle_word
+df_NSalpSA = just_map_TAN[-c(1:118),]
+df_NSalpSA$Cycle_word
+
+lm <- lm(Hbact_ml ~ Depth, data=df_SalpScSA)
+summary(lm) #0.0467 *  
+plot(lm)
+histogram(df_SalpScSA$Hbact_ml)
+
+lm <- lm(Hbact_ml ~ Depth, data=df_SalpSA)
+summary(lm) #8.86e-05 ***
+plot(lm)
+
+lm <- lm(Hbact_ml ~ Depth, data=df_NSalpST)
+summary(lm) # 3.05e-05 ***
+plot(lm)
+
+lm <- lm(Hbact_ml ~ Depth, data=df_SalpST)
+summary(lm) #depth 8.07e-07 ***
+plot(lm)
+
+lm <- lm(Hbact_ml ~ Depth, data=df_NSalpSA)
+summary(lm) #depth 0.00619 ** 
+plot(lm)
+
+# Build the model
+
+model <- gam(Hbact_ml ~ s(Depth), data = just_map_TAN)
+
+model <- lm(Hbact_ml ~ poly(Depth, 6, raw = TRUE), data = just_map_TAN)
+summary(model)
+plot(model)
+######
+
+aov <- aov(Hbact_ml ~ WaterMass*Salps, data=just_map_TAN)
+summary(aov)
+#here1
+mean_Hbact_ml <- summarySE(just_map_TAN, measurevar="Hbact_ml", groupvars=c("Salps", "WaterMass"), na.rm = TRUE)
+
+head(just_map_TAN)
+lm <- lm(Hbact_ml ~ Salp_Sum_gm2, data=just_map_TAN)
+summary(lm) #not sig 0.852    
+
+lm <- lm(Hbact_ml ~ Salp_Depth_gm2, data=just_map_TAN)
+summary(lm) #not sig  0.235    
+
+lm <- lm(Hbact_ml ~ NDW_SUM_gm2, data=just_map_TAN)
+summary(lm) #not sig  0.378    
+
+lm <- lm(Hbact_ml ~ WaterMass, data=just_map_TAN)
+summary(lm) #ST and SA diff 0.000212 *** (SA)
+
+lm <- lm(Hbact_ml ~ Salps*WaterMass*Depth, data=just_map_TAN)
+summary(lm) 
+
+lm <- lm(Hbact_ml ~ Depth, data=just_map_TAN)
+summary(lm) #1.32e-07 ***
+
+lmer <- lmerTest::lmer(Hbact_ml ~ Salps*WaterMass+(1|Depth), data=just_map_TAN)
+summary(lmer) #WM Sc-SA 0.0057 ** , salps:WM 0.0311 *  
+lmer
+AICc(lmer) #3243.954
+anova(lmer) #salps 8.072e-06 ***, WM 6.784e-16 ***, S:WM 0.0311 *  
+r.squaredGLMM(lmer) #0.6079334
+
+library(lmerTest)
+
+###this oneeeeeee
+lmer <- lmerTest::lmer(Hbact_ml ~ Salp_Sum_gm2+WaterMass+(1|Depth), data=just_map_TAN)
+summary(lmer) # salps 4.05e-06 ***,  ScSA 2.90e-07 ***, ST 1.04e-05 ***
+AICc(lmer) #3277.392
+confint(lmer) # salps AND water mass sig
+anova(lmer)
+r.squaredGLMM(lmer) #0.5810906
+par(mfrow = c(2,2))
+plot(lmer)
+########
+
+head(just_map_TAN)
+lmer <- glmer(BPR ~ NDW_SUM_gm2*WaterMass+(1|Depth), data=just_map_TAN)
+summary(lmer) # salps  0.00287 **
+lmer
+AICc(lmer) #739.0698
+confint(lmer) #ALL SIGGGGG incl intercept
+anova(lmer) #salps 0.008626 **
+r.squaredGLMM(lmer) #0.2341394
+
+lmer <- glmer(BPR ~ NDW_SUM_gm2*Salp_Sum_gm2*WaterMass+(1|Depth), data=just_map_TAN)
+summary(lmer) # salps  0.00287 **
+lmer
+AICc(lmer) # 730.3974
+confint(lmer) #none siggg
+anova(lmer) #salps 0.008626 **
+r.squaredGLMM(lmer) #0.241888
+
+lmer <- glmer(BPR ~ Salp_Sum_gm2+NDW_SUM_gm2+(1|Depth)+(1|WaterMass), data=just_map_TAN)
+summary(lmer) # salps  0.00287 **
+lmer
+AICc(lmer) # 731.9835
+confint(lmer) #salp sig
+anova(lmer) #salps 0.008626 **
+r.squaredGLMM(lmer) #0.2347812
+
+lmer <- glmer(BPR ~ Salp_Sum_gm2+WaterMass+NDW_SUM_gm2+(1|Depth), data=just_map_TAN)
+summary(lmer) # salps  0.00287 **
+lmer
+AICc(lmer) # 728.6117
+confint(lmer) #salp sig
+anova(lmer) #salps 0.008626 **
+r.squaredGLMM(lmer) #0.2347812
+
+##lowest AIC
+lmer <- glmer(BPR ~ Salp_Sum_gm2+WaterMass*NDW_SUM_gm2+(1|Depth), data=just_map_TAN)
+summary(lmer) # salps  0.00287 **
+lmer
+AICc(lmer) # 727.0746
+confint(lmer) #salp sig
+anova(lmer) #salps 0.008626 **
+r.squaredGLMM(lmer) #0.2334113
+
+##lowest AIC
+lmer <- glmer(BPR ~ Salp_Sum_gm2+WaterMass*NDW_SUM_gm2+NPP+SumSFChla+(1|Depth), data=just_map_TAN)
+summary(lmer) # salps  0.00287 **
+lmer
+AICc(lmer) # 381.5316
+confint(lmer) #salp sig
+anova(lmer) #salps 0.008626 **
+r.squaredGLMM(lmer) #0.3222261
+
+lmer <- glmer(BPR ~ Salp_Sum_gm2+WaterMass+NDW_SUM_gm2+NPP+SumSFChla+(1|Depth), data=just_map_TAN)
+summary(lmer) # salps  0.00287 **
+lmer
+AICc(lmer) # 384.8767
+confint(lmer) #salp sig :o
+anova(lmer) 
+r.squaredGLMM(lmer) #0.315451
+
+head(just_map_TAN)
+
+lmer <- glmer(BPR ~ Salp_Sum_gm2+WaterMass+NDW_SUM_gm2+NPP+SumSFChla+DRP_uM+NH4_uM+NO3_uM+DRSi_uM+(1|Depth), data=just_map_TAN)
+summary(lmer) # 
+lmer
+AICc(lmer) # 298.1356
+confint(lmer) #none sig
+anova(lmer) 
+r.squaredGLMM(lmer) #0.315451
+
+
+lmer <- glmer(BPR ~ Salps*WaterMass+(1|Depth)+(1|Day), data=just_map_TAN)
+summary(lmer) # salps  
+lmer
+AICc(lmer) # 749.0916
+confint(lmer) # salps  deff sig 
+anova(lmer) 
+r.squaredGLMM(lmer) #0.1328453
+
+lmer <- glmer(BPR ~ Salps*WaterMass*Depth+(1|Day), data=just_map_TAN)
+summary(lmer) # salps  
+lmer
+AICc(lmer) # 749.0916
+confint(lmer) # salps  deff sig 
+anova(lmer) 
+r.squaredGLMM(lmer) #0.1328453
+
+just_map_TAN
+lmer <- lmer(BPR ~ Salp_Sum_gm2*WaterMass+(1|Depth), data=just_map_TAN)
+summary(lmer) # salps  2.04e-06 *** #  WM: 0.0469 *  
+lmer
+AICc(lmer) #  732.3572
+confint(lmer) # salps  deff sig 
+anova(lmer) #salps not sig WM 0.04692 *
+r.squaredGLMM(lmer) #0.2341394
+
+lmer <- lmer(BPR ~ WaterMass+(1|Depth), data=just_map_TAN)
+summary(lmer) # salps  2.04e-06 *** #  WM: 0.0469 *  
+lmer
+AICc(lmer) #  757.0615
+confint(lmer) # salps  deff sig 
+anova(lmer) #salps not sig WM 0.04692 *
+r.squaredGLMM(lmer) #0.08927929
+
+lmer <- lmer(BPR ~ Depth+(1|Cycle_word), data=just_map_TAN)
+summary(lmer) # 0.010804 *  
+lmer
+AICc(lmer) # 748.4513
+confint(lmer) # salps  deff sig 
+anova(lmer) #salps not sig WM 0.04692 *
+r.squaredGLMM(lmer) #0.178022
+
+lmer <- lmer(BPR ~ Depth+(1|WaterMass), data=just_map_TAN)
+summary(lmer) # 0.010804 *  
+lmer
+AICc(lmer) # 757.836
+confint(lmer) # deopth  deff sig 
+anova(lmer) #salps not sig WM 0.04692 *
+r.squaredGLMM(lmer) #0.178022
+
+range(just_map_TAN$BPR, na.rm=TRUE)
+```
+
+##Figure 4.5 and related statistics 
+
+```{r Alpha diversity}
+Phyloseq_TANr
+tax_table(Phyloseq_TANr)
+
+rich = estimate_richness(Phyloseq_TANr, measures = c("Observed"))
+rich = data.frame(rich, SampleID = sample_names(Phyloseq_TANr))
+rich_map = data.frame(bmsd_TAN)
+rich_meta_TAN = merge(rich, rich_map, by.x = "SampleID", by.y = "X.SampleID")
+
+Mean_Observed_1 <- summarySE(rich_meta_TAN, measurevar="Observed", groupvars=c("Cycle_word"), na.rm = TRUE)
+Mean_Observed_1
+
+Ch4_Simple_Observed <- ggplot(rich_meta_TAN, aes(x=Cycle_word, y=Observed))+
+  geom_boxplot(aes(colour=Cycle_word), size=1)+
+  geom_boxplot(aes(fill=Cycle_word, colour=Cycle_word))+
+ scale_fill_manual(values=Cycle_colour_list_WM2,limits=positions)+
+  xlab("Cycle")+
+  ylab("ASV richness")+
+  labs(fill="Cycle")+
+  labs(colour="Cycle")+
+  theme_bw()+
+  scale_colour_manual(values=Cycle_colour_list_WM,limits=positions)+
+    scale_x_discrete(limits=positions)+labs(limits=positions)+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+
+Ch4_Simple_Observed
+
+rich = estimate_richness(Phyloseq_TANr, measures = c("Shannon"))
+rich = data.frame(rich, SampleID = sample_names(Phyloseq_TANr))
+rich_map = data.frame(bmsd_TAN)
+rich_meta_TAN = merge(rich, rich_map, by.x = "SampleID", by.y = "X.SampleID")
+rich_meta_TAN
+
+
+Mean_Shannon_1 <- summarySE(rich_meta_TAN, measurevar="Shannon", groupvars=c("Cycle_word"), na.rm = TRUE)
+Mean_Shannon_1
+
+Ch5_Simple_Shannon <- ggplot(rich_meta_TAN, aes(x=Cycle_word, y=Shannon))+
+  geom_boxplot(aes(colour=Cycle_word), size=1)+
+  geom_boxplot(aes(fill=Cycle_word, colour=Cycle_word))+
+  scale_fill_manual(values=Cycle_fill_list_WM,limits=positions)+
+  xlab("Cycle")+
+  ylab("Shannon diversity")+
+  labs(fill="Cycle")+
+  labs(colour="Cycle")+
+  theme_bw()+
+  scale_colour_manual(values=Cycle_colour_list_WM,limits=positions)+
+    scale_x_discrete(limits=positions)+labs(limits=positions)+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+Ch5_Simple_Shannon
+
+Mean_Observed <- summarySE(rich_meta_TAN, measurevar="Observed", groupvars=c("Cycle_word", "Depth"), na.rm = TRUE)
+Mean_Observed
+
+Observed_plot <- ggplot(Mean_Observed, aes(x=Depth, y=Observed, group=Cycle_word))+
+  geom_point(aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_line(aes(colour=Cycle_word), size=0.3)+
+  geom_errorbar(aes(ymax=Observed + se, ymin = Observed-se, colour=Cycle_word), width=0)+
+  #reverse depth so it starts at zero
+  scale_x_reverse()+
+  #put the y axis labes on the opposite side so when its flipped it will appear at to6
+  scale_y_continuous(position="right")+
+  #this is how you reverse the look and order or the coordinates for the graph
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab("ASV richness")+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(120, 340)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits = positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits = positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits = positions)+
+  labs(colour="Cycle", shape="Cycle", limits = positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+  
+Observed_plot
+
+Mean_Shannon <- summarySE(rich_meta_TAN, measurevar="Shannon", groupvars=c("Cycle_word", "Depth"), na.rm = TRUE)
+Mean_Shannon
+
+Shannon_plot <- ggplot(Mean_Shannon, aes(x=Depth, y=Shannon, group=Cycle_word))+
+  geom_point(aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_line(aes(colour=Cycle_word), size=0.3)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab("Shannon diversity")+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(3.5, 5.7)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits = positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits = positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits = positions)+
+  labs(colour="Cycle", shape="Cycle", limits = positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+  
+Shannon_plot
+
+
+rich = estimate_richness(Phyloseq_TANr, measures = c("Observed", "Shannon"))
+rich = data.frame(rich, SampleID = sample_names(Phyloseq_TANr))
+rich_map = data.frame(bmsd_TAN)
+rich_meta_TAN = merge(rich, rich_map, by.x = "SampleID", by.y = "X.SampleID")
+
+rich_meta_SalpScSA = rich_meta_TAN[-c(44:143),]
+rich_meta_SalpScSA$Cycle_word
+rich_meta_SalpSA = rich_meta_TAN[-c(1:43, 73:143),]
+rich_meta_SalpSA$Cycle_word
+rich_meta_NSalpST = rich_meta_TAN[-c(1:72, 97:143),]
+rich_meta_NSalpST$Cycle_word
+rich_meta_SalpST = rich_meta_TAN[-c(1:96, 116:143),]
+rich_meta_SalpST$Cycle_word
+rich_meta_NSalpSA = rich_meta_TAN[-c(1:115),]
+rich_meta_NSalpSA$Cycle_word
+
+Shannon_SalpScSA <- summarySE(rich_meta_SalpScSA, measurevar="Shannon", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Shannon_SalpSA <- summarySE(rich_meta_SalpSA, measurevar="Shannon", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Shannon_NSalpST <- summarySE(rich_meta_NSalpST, measurevar="Shannon", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Shannon_SalpST <- summarySE(rich_meta_SalpST, measurevar="Shannon", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Shannon_NSalpSA <- summarySE(rich_meta_NSalpSA, measurevar="Shannon", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+
+Shannon_plot_ScSA <- ggplot(Shannon_SalpScSA, aes(x=Depth, y=Shannon, group=Day))+
+  geom_point(aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Shannon_SalpSA, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Shannon_NSalpST, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Shannon_SalpST, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Shannon_NSalpSA, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_line(aes(colour=Cycle_word, group=Day), size=0.3)+
+ geom_line(data = Shannon_SalpSA, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Shannon_NSalpST, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Shannon_SalpST, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Shannon_NSalpSA, aes(colour=Cycle_word, group=Day), size=0.3)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab("Shannon Diversity")+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(3.8, 5.2)+
+  xlim(155,0)+
+  #geom_hline(yintercept=100,colour="black",linetype = 2)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+Shannon_plot_ScSA
+
+Observed_SalpScSA <- summarySE(rich_meta_SalpScSA, measurevar="Observed", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Observed_SalpSA <- summarySE(rich_meta_SalpSA, measurevar="Observed", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Observed_NSalpST <- summarySE(rich_meta_NSalpST, measurevar="Observed", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Observed_SalpST <- summarySE(rich_meta_SalpST, measurevar="Observed", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+Observed_NSalpSA <- summarySE(rich_meta_NSalpSA, measurevar="Observed", groupvars=c("Cycle_word", "Depth", "Day"), na.rm = TRUE)
+
+Observed_plot_ScSA <- ggplot(Observed_SalpScSA, aes(x=Depth, y=Observed, group=Day))+
+  geom_point(aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Observed_SalpSA, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Observed_NSalpST, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Observed_SalpST, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_point(data = Observed_NSalpSA, aes(colour=Cycle_word, shape=Cycle_word),size=3)+
+  geom_line(aes(colour=Cycle_word, group=Day), size=0.3)+
+ geom_line(data = Observed_SalpSA, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Observed_NSalpST, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Observed_SalpST, aes(colour=Cycle_word, group=Day), size=0.3)+
+  geom_line(data = Observed_NSalpSA, aes(colour=Cycle_word, group=Day), size=0.3)+
+  scale_x_reverse()+
+  scale_y_continuous(position="right")+
+  coord_flip()+
+  xlab("Depth (m)")+
+  ylab("ASV Richness")+
+  expand_limits(y=0)+
+  scale_y_continuous()+theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  ylim(120, 335)+
+  xlim(155,0)+
+  #geom_hline(yintercept=100,colour="black",linetype = 2)+
+  scale_colour_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_fill_manual(values=Cycle_colour_list_WM, limits=positions)+
+  scale_shape_manual(values = Cycle_shape_list_WM, limits=positions)+
+  scale_linetype_discrete()+
+  labs(colour="Cycle", shape="Cycle", limits=positions)+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+Observed_plot_ScSA
+
+
+Shannon_plot_ScSA
+
+Diversity_Quad_Plot <- Ch4_Simple_Observed+theme(legend.position = "none")+
+  ggtitle("a") +
+  Observed_plot_ScSA +
+  ggtitle("b")+
+  Ch5_Simple_Shannon+theme(legend.position = "none")+
+  ggtitle("c") +
+  Shannon_plot_ScSA +
+  ggtitle("d")+
+  plot_layout(guides = 'collect', ncol = 2)
+Diversity_Quad_Plot
+
+ggsave(
+  "CH4_Diversity_Quad_All.png",
+  width =14,
+  height = 12,
+  units = c("in"),
+  dpi = 300,
+  limitsize = TRUE
+)
+
+Shannon_Plot <- 
+  Ch5_Simple_Shannon+
+  ggtitle("a") +
+  Shannon_plot_ScSA +
+  ggtitle("b")+
+  plot_layout(guides = 'collect', ncol = 2)
+Shannon_Plot
+
+ggsave(
+  "CH4_Shannon_All.png",
+  width =14,
+  height = 6,
+  units = c("in"),
+  dpi = 300,
+  limitsize = TRUE
+)
+
+Observed_Plot_Dual1 <- Ch4_Simple_Observed+theme(legend.position = "none")+
+  ggtitle("a") +
+  Observed_plot_ScSA +
+  ggtitle("b")+
+   plot_layout(guides = 'collect', ncol = 2)
+Observed_Plot_Dual1
+
+ggsave(
+  "CH4_Observed_All.png",
+  width =14,
+  height = 6,
+  units = c("in"),
+  dpi = 300,
+  limitsize = TRUE
+)
+
+Ch4_Figure_4.5 <- Ch4_Simple_Observed+theme(legend.position = "none")+
+  ggtitle("a") +
+  Observed_plot +
+  ggtitle("b")+
+   plot_layout(guides = 'collect', ncol = 2)
+Ch4_Figure_4.5
+
+ggsave(
+  "Ch4_Figure_4.5.png",
+  width =14,
+  height = 6,
+  units = c("in"),
+  dpi = 300,
+  limitsize = TRUE
+)
+  
+```
+
+```{r Alpha diversity Kruskal Test}
+hist(rich_meta_TAN$Observed) 
+plot(rich_meta_TAN$Observed) 
+
+hist(rich_meta_TAN$Shannon) 
+plot(rich_meta_TAN$Shannon) 
+
+###Kruskal-Wallis test for correlation between observed species and shannon and treatment 
+kruskal.test(Observed ~ Cycle_word, data = rich_meta_TAN) 
+kruskal.test(Shannon ~ Cycle_word, data = rich_meta_TAN) 
+dunnTest(Observed ~ Cycle_word, data = rich_meta_TAN)  
+dunnTest(Shannon ~ Cycle_word, data = rich_meta_TAN)
+
+kruskal.test(Observed ~ Depth, data = rich_meta_TAN)
+kruskal.test(Shannon ~ Depth, data = rich_meta_TAN)
+
+kruskal.test(Observed ~ Day, data = rich_meta_TAN) 
+kruskal.test(Shannon ~ Day, data = rich_meta_TAN) 
+
+kruskal.test(Observed ~ Salps, data = rich_meta_TAN) 
+kruskal.test(Shannon ~ Salps, data = rich_meta_TAN) 
+boxplot(Shannon ~ Salps, data = rich_meta_TAN)
+boxplot(Observed ~ Salps, data = rich_meta_TAN)
+
+kruskal.test(Observed ~ WaterMass, data = rich_meta_TAN) 
+kruskal.test(Shannon ~ WaterMass, data = rich_meta_TAN) 
+dunnTest(Observed ~ WaterMass, data = rich_meta_TAN) 
+dunnTest(Shannon ~ WaterMass, data = rich_meta_TAN)
+
+summary(lm(Observed ~ Salp_Sum_gm2, data = rich_meta_TAN)) 
+kruskal.test(Shannon ~ Salp_Sum_gm2, data = rich_meta_TAN) 
+
+summary(lm(Observed ~ Bla_Sum_gm2, data = rich_meta_TAN))
+kruskal.test(Shannon ~ Bla_Sum_gm2, data = rich_meta_TAN) 
+
+summary(lm(Observed ~ Ooz_Sum_gm2, data = rich_meta_TAN)) 
+kruskal.test(Shannon ~ Ooz_Sum_gm2, data = rich_meta_TAN)
+
+boxplot(Salp_Sum_gm2~Observed, data=rich_meta_TAN)
+boxplot(Observed~Salp_Sum_gm2, data=rich_meta_TAN)
+boxplot(Shannon~Salp_Sum_gm2, data=rich_meta_TAN)
+head(rich_meta_TAN)
+plot(Observed~Salp_Depth_gm2, data=rich_meta_TAN)
+plot(Shannon~Salp_Depth_gm2, data=rich_meta_TAN)
+plot(Salp_Depth_gm2~Observed, data=rich_meta_TAN)
+plot(Salp_Depth_gm2~Depth, data=rich_meta_TAN)
+plot(Salp_Depth_gm2~Depth, data=rich_meta_TAN)
+
+kruskal.test(Observed ~ NDW_SUM_gm2, data = rich_meta_TAN) 
+kruskal.test(Shannon ~ NDW_SUM_gm2, data = rich_meta_TAN) 
+
+#posthoc tests
+
+dunnTest(Observed ~ Cycle_word, data = rich_meta_TAN) 
+dunnTest(Shannon ~ Cycle_word, data = rich_meta_TAN) 
+dunnTest(Observed ~ Depth, data = rich_meta_TAN) 
+dunnTest(Shannon ~ Depth, data = rich_meta_TAN) 
+```
+
+##Figure 4.6 and related statistics 
+
+```{r NMDS}
+Phyloseq_TAN_NMDS = ordinate(Phyloseq_TANr, "NMDS", "bray") 
+Phyloseq_TAN_NMDS
+summary(Phyloseq_TAN_NMDS)
+stressplot(Phyloseq_TAN_NMDS)
+
+text(Phyloseq_TAN_NMDS, display = "species", csv = 0.5)
+nmds_coordinates <- Phyloseq_TAN_NMDS$points
+plot(nmds_coordinates)
+Phyloseq_TAN_NMDS$points
+
+NMDS_TAN = plot_ordination(Phyloseq_TANr, Phyloseq_TAN_NMDS, color = "Cycle_word", shape = "Cycle_word") + 
+  geom_point(size = 3) +
+  theme_few() +
+  scale_color_manual("Cycle_word", values = Cycle_colour_list_WM, limits = positions) +
+  scale_shape_manual("Cycle_word", values = Cycle_shape_list_WM, limits = positions) +
+  scale_fill_manual("Cycle_word", values = Cycle_fill_list_WM, limits = positions) +
+  theme(text = element_text(size=20), axis.text.x = element_text(angle = 90, hjust = 1))  +
+  theme(legend.title = element_blank()) +
+  annotate(geom="text", x=-2.1, y=1.1, label="Stress = 0.1319", color="black")+ 
+  stat_ellipse(type = "norm", linetype = 2) + 
+  stat_ellipse(type = "t")
+NMDS_TAN
+  
+ggsave(
+  "CH4_Figure 4.6_A.png",
+  width = 8.5,
+  height = 6,
+  units = c("in"),
+  dpi = 300,
+  limitsize = TRUE
+)
+
+
+NMDS_TAN_Chla = plot_ordination(Phyloseq_TANr, Phyloseq_TAN_NMDS, color = "SumSFChla", shape = "Salps") + theme_few() + theme(text = element_text(size=20), axis.text.x = element_text(angle = 90, hjust = 1)) + scale_color_gradient(low = "lightblue", high = "darkblue") + geom_point(size = 5) + labs(colour = "SumSFChla", shape="Salps") 
+
+NMDS_TAN_Chla
+```
+
+```{r  PERMANOVAs and ANOSIM}
+bray_TAN <- phyloseq::distance(Phyloseq_TANr, method="bray")
+sampledf <- data.frame(sample_data(Phyloseq_TANr))
+
+bray_TAN
+sampledf
+
+adonis(bray_TAN ~ Cycle, data=sampledf) 
+adonis(bray_TAN ~ Depth, data=sampledf) 
+adonis(bray_TAN ~ Salps, data=sampledf) 
+adonis(bray_TAN ~ WaterMass, data=sampledf) 
+head(sampledf)
+
+Phyloseq_TAN_Salps = subset_samples(Phyloseq_TANr, !Salp_Sum_gm2 == "NA")
+bray_TAN_Salps <- phyloseq::distance(Phyloseq_TAN_Salps, method="bray")
+sampledf_Salps <- data.frame(sample_data(Phyloseq_TAN_Salps))
+adonis(bray_TAN_Salps ~ Salp_Sum_gm2, data=sampledf_Salps) 
+
+Phyloseq_TAN_Temperature = subset_samples(Phyloseq_TANr, !Temperature == "NA")
+bray_TAN_Temperature <- phyloseq::distance(Phyloseq_TAN_Temperature, method="bray")
+sampledf_Temperature <- data.frame(sample_data(Phyloseq_TAN_Temperature))
+adonis(bray_TAN_Temperature ~ Temperature, data=sampledf_Temperature) 
+
+Phyloseq_TAN_Salinity = subset_samples(Phyloseq_TANr, !Salinity == "NA")
+bray_TAN_Salinity <- phyloseq::distance(Phyloseq_TAN_Salinity, method="bray")
+sampledf_Salinity <- data.frame(sample_data(Phyloseq_TAN_Salinity))
+adonis(bray_TAN_Salinity ~ Salinity, data=sampledf_Salinity) 
+
+Phyloseq_TAN_N2O_Sat = subset_samples(Phyloseq_TANr, !N2O_Sat == "NA")
+bray_TAN_N2O_Sat <- phyloseq::distance(Phyloseq_TAN_N2O_Sat, method="bray")
+sampledf_N2O_Sat <- data.frame(sample_data(Phyloseq_TAN_N2O_Sat))
+adonis(bray_TAN_N2O_Sat ~ N2O_Sat, data=sampledf_N2O_Sat) 
+
+Phyloseq_TAN_CH4_Sat = subset_samples(Phyloseq_TANr, !CH4_Sat == "NA")
+bray_TAN_CH4_Sat <- phyloseq::distance(Phyloseq_TAN_CH4_Sat, method="bray")
+sampledf_CH4_Sat <- data.frame(sample_data(Phyloseq_TAN_CH4_Sat))
+adonis(bray_TAN_CH4_Sat ~ CH4_Sat, data=sampledf_CH4_Sat) 
+
+head(sample_data(Phyloseq_TANr))
+Phyloseq_TAN_Salps = subset_samples(Phyloseq_TANr, !Salp_Sum_gm2 == "NA")
+bray_TAN_Salps <- phyloseq::distance(Phyloseq_TAN_Salps, method="bray")
+sampledf_Salps <- data.frame(sample_data(Phyloseq_TAN_Salps))
+adonis(bray_TAN_Salps ~ Salp_Sum_gm2, data=sampledf_Salps) 
+
+head(sample_data(Phyloseq_TANr))
+Phyloseq_TAN_Hbact_ml = subset_samples(Phyloseq_TANr, !Hbact_ml == "NA")
+bray_TAN_Hbact_ml <- phyloseq::distance(Phyloseq_TAN_Hbact_ml, method="bray")
+sampledf_Hbact_ml <- data.frame(sample_data(Phyloseq_TAN_Hbact_ml))
+adonis(bray_TAN_Hbact_ml ~ Hbact_ml, data=sampledf_Hbact_ml)
+
+head(sample_data(Phyloseq_TANr))
+Phyloseq_TAN_Salps = subset_samples(Phyloseq_TANr, !NDW_SUM_gm2 == "NA")
+bray_TAN_Salps <- phyloseq::distance(Phyloseq_TAN_Salps, method="bray")
+sampledf_Salps <- data.frame(sample_data(Phyloseq_TAN_Salps))
+adonis(bray_TAN_Salps ~ NDW_SUM_gm2, data=sampledf_Salps) 
+
+adonis(bray_TAN ~ NDW_SUM_gm2, data=sampledf) 
+adonis(bray_TAN ~ BPR, data=sampledf_BPR) 
+
+Phyloseq_TAN_BetaD = betadisper(bray_TAN,sampledf$Cycle) 
+permutest(Phyloseq_TAN_BetaD)
+
+Phyloseq_TAN_BetaD = betadisper(bray_TAN,sampledf$Depth)
+permutest(Phyloseq_TAN_BetaD)
+
+Phyloseq_TAN_BetaD = betadisper(bray_TAN,sampledf$Salps) 
+permutest(Phyloseq_TAN_BetaD)
+
+Phyloseq_TAN_BetaD = betadisper(bray_TAN,sampledf$WaterMass) 
+permutest(Phyloseq_TAN_BetaD)
+
+Phyloseq_TAN_simper = simper(bray_TAN,sampledf$WaterMass)
+summary(Phyloseq_TAN_simper)
+permutest(Phyloseq_TAN_simper)
+
+ 
+Cycle_group = get_variable(Phyloseq_TANr, "Cycle")
+Cycle_ano = anosim(phyloseq::distance(Phyloseq_TANr, "bray"), Cycle_group)
+Cycle_ano$signif
+summary(Cycle_ano) 
+
+Depth_group = get_variable(Phyloseq_TANr, "Depth")
+Depth_ano = anosim(phyloseq::distance(Phyloseq_TANr, "bray"), Depth_group)
+Depth_ano$signif
+summary(Depth_ano)
+
+Salps_group = get_variable(Phyloseq_TANr, "Salps")
+Salps_ano = anosim(phyloseq::distance(Phyloseq_TANr, "bray"), Salps_group)
+Salps_ano$signif
+summary(Salps_ano)
+
+WaterMass_group = get_variable(Phyloseq_TANr, "WaterMass")
+WaterMass_ano = anosim(phyloseq::distance(Phyloseq_TANr, "bray"), WaterMass_group)
+WaterMass_ano$signif
+summary(WaterMass_ano)
+
+Phyloseq_TAN_Salps = subset_samples(Phyloseq_TANr, !Salp_Sum_gm2 == "NA")
+Salps_group = get_variable(Phyloseq_TAN_Salps, "Salp_Sum_gm2")
+Salps_ano = anosim(phyloseq::distance(Phyloseq_TAN_Salps, "bray"), Salps_group)
+summary(Salps_ano)
+
+Phyloseq_TAN_ZooP = subset_samples(Phyloseq_TANr, !NDW_SUM_gm2 == "NA")
+ZooP_group = get_variable(Phyloseq_TAN_ZooP, "NDW_SUM_gm2")
+ZooP_ano = anosim(phyloseq::distance(Phyloseq_TAN_ZooP, "bray"), ZooP_group)
+summary(ZooP_ano)
+
+head(sample_data(Phyloseq_TANr))
+
+(sample_data(Phyloseq_TANr))$NDW_1_2mm_gm2
+
+Phyloseq_TAN_ZooP2 = subset_samples(Phyloseq_TANr, !NDW_2_4mm_gm2 == "NA")
+ZooP_group2 = get_variable(Phyloseq_TAN_ZooP2, "NDW_2_4mm_gm2")
+ZooP_ano2 = anosim(phyloseq::distance(Phyloseq_TAN_ZooP2, "bray"), ZooP_group2)
+summary(ZooP_ano2)
+
+Phyloseq_TAN_ZooP = subset_samples(Phyloseq_TANr, !NDW_1_2mm_gm2 == "NA")
+ZooP_group = get_variable(Phyloseq_TAN_ZooP, "NDW_1_2mm_gm2")
+ZooP_ano = anosim(phyloseq::distance(Phyloseq_TAN_ZooP, "bray"), ZooP_group)
+summary(ZooP_ano)
+
+Phyloseq_TAN_ZooP = subset_samples(Phyloseq_TANr, !NDW_0.5_1mm_gm2 == "NA")
+ZooP_group = get_variable(Phyloseq_TAN_ZooP, "NDW_0.5_1mm_gm2")
+ZooP_ano = anosim(phyloseq::distance(Phyloseq_TAN_ZooP, "bray"), ZooP_group)
+summary(ZooP_ano)
+
+Phyloseq_TAN_ZooP = subset_samples(Phyloseq_TANr, !NDW_0.2_0.5mm_gm2 == "NA")
+ZooP_group = get_variable(Phyloseq_TAN_ZooP, "NDW_0.2_0.5mm_gm2")
+ZooP_ano = anosim(phyloseq::distance(Phyloseq_TAN_ZooP, "bray"), ZooP_group)
+summary(ZooP_ano)
+
+Phyloseq_TAN_DRP_uM = subset_samples(Phyloseq_TANr, !DRP_uM == "NA")
+DRP_uM_ano = vegan::anosim(phyloseq::distance(Phyloseq_TAN_DRP_uM, "bray"), get_variable(Phyloseq_TAN_DRP_uM, "DRP_uM"))
+summary(DRP_uM_ano)
+
+bray_TAN_DRP <- phyloseq::distance(Phyloseq_TAN_DRP_uM, method="bray")
+sampledf_DRP <- data.frame(sample_data(Phyloseq_TAN_DRP_uM))
+adonis(bray_TAN_DRP ~ DRP_uM, data=sampledf_DRP) #p:
+
+Phyloseq_TAN_NH4_uM = subset_samples(Phyloseq_TANr, !NH4_uM == "NA")
+NH4_uM_group = get_variable(Phyloseq_TAN_NH4_uM, "NH4_uM")
+NH4_uM_ano = anosim(phyloseq::distance(Phyloseq_TAN_NH4_uM, "bray"), NH4_uM_group)
+summary(NH4_uM_ano)
+
+bray_TAN_NH4_uM <- phyloseq::distance(Phyloseq_TAN_NH4_uM, method="bray")
+sampledf_NH4_uM <- data.frame(sample_data(Phyloseq_TAN_NH4_uM))
+adonis(bray_TAN_NH4_uM ~ NH4_uM, data=sampledf_NH4_uM) #p: 
+
+
+Phyloseq_TAN_NO3_uM = subset_samples(Phyloseq_TANr, !NO3_uM == "NA")
+NO3_uM_group = get_variable(Phyloseq_TAN_NO3_uM, "NO3_uM")
+NO3_uM_ano = anosim(phyloseq::distance(Phyloseq_TAN_NO3_uM, "bray"), NO3_uM_group)
+summary(NO3_uM_ano)
+bray_TAN_NO3_uM <- phyloseq::distance(Phyloseq_TAN_NO3_uM, method="bray")
+sampledf_NO3_uM <- data.frame(sample_data(Phyloseq_TAN_NO3_uM))
+adonis(bray_TAN_NO3_uM ~ NO3_uM, data=sampledf_NO3_uM) #p: 
+
+
+Phyloseq_TAN_DRSi_uM = subset_samples(Phyloseq_TANr, !DRSi_uM == "NA")
+DRSi_uM_group = get_variable(Phyloseq_TAN_DRSi_uM, "DRSi_uM")
+DRSi_uM_ano = anosim(phyloseq::distance(Phyloseq_TAN_DRSi_uM, "bray"), DRSi_uM_group)
+summary(DRSi_uM_ano)
+bray_TAN_DRSi_uM <- phyloseq::distance(Phyloseq_TAN_DRSi_uM, method="bray")
+sampledf_DRSi_uM <- data.frame(sample_data(Phyloseq_TAN_DRSi_uM))
+adonis(bray_TAN_DRSi_uM ~ DRSi_uM, data=sampledf_DRSi_uM) #p: 
+
+
+Phyloseq_TAN_SumSFChla = subset_samples(Phyloseq_TANr, !SumSFChla == "NA")
+SumSFChla_group = get_variable(Phyloseq_TAN_SumSFChla, "SumSFChla")
+SumSFChla_ano = anosim(phyloseq::distance(Phyloseq_TAN_SumSFChla, "bray"), SumSFChla_group)
+summary(SumSFChla_ano) 
+bray_TAN_SumSFChla <- phyloseq::distance(Phyloseq_TAN_SumSFChla, method="bray")
+sampledf_SumSFChla <- data.frame(sample_data(Phyloseq_TAN_SumSFChla))
+adonis(bray_TAN_SumSFChla ~ SumSFChla, data=sampledf_SumSFChla) #p: 
+
+Phyloseq_TAN_Temperature = subset_samples(Phyloseq_TANr, !Temperature == "NA")
+Temperature_group = get_variable(Phyloseq_TAN_Temperature, "Temperature")
+Temperature_ano = anosim(phyloseq::distance(Phyloseq_TAN_Temperature, "bray"), Temperature_group)
+summary(Temperature_ano) 
+
+Phyloseq_TAN_Salinity = subset_samples(Phyloseq_TANr, !Salinity == "NA")
+Salinity_group = get_variable(Phyloseq_TAN_Salinity, "Salinity")
+Salinity_ano = anosim(phyloseq::distance(Phyloseq_TAN_Salinity, "bray"), Salinity_group)
+summary(Salinity_ano) 
+
+Phyloseq_TAN_CH4_Sat = subset_samples(Phyloseq_TANr, !CH4_Sat == "NA")
+CH4_Sat_group = get_variable(Phyloseq_TAN_CH4_Sat, "CH4_Sat")
+CH4_Sat_ano = anosim(phyloseq::distance(Phyloseq_TAN_CH4_Sat, "bray"), CH4_Sat_group)
+summary(CH4_Sat_ano) 
+
+Phyloseq_TAN_N2O_Sat = subset_samples(Phyloseq_TANr, !N2O_Sat == "NA")
+N2O_Sat_group = get_variable(Phyloseq_TAN_N2O_Sat, "N2O_Sat")
+N2O_Sat_ano = anosim(phyloseq::distance(Phyloseq_TAN_N2O_Sat, "bray"), N2O_Sat_group)
+summary(N2O_Sat_ano) 
+```
+
+
+##Figure 4.7 and related statistics 
+```{r Set up phylum}
+#Subset to only prokaryota
+Subsetprokaryota = c(as.character("prokaryota"))
+#Make a phyloseq based on purely domain from prokaryotes
+my_Phylum_phyloseq = Phyloseq_TAN_rm %>% #Identify the original subsetted phyloseq object
+  tax_glom("Phylum") %>% #Merge species with the same Phylum
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% #Convert the absolute count to a percentage count
+  psmelt() %>% #Adjust the data from a phyloseq object into a data.frame-class table  
+  filter(Abundance > 0.01)   %>% #Remove samples that make up less than one percent of the abundance.
+  arrange(Phylum)#Arange the samples by Phylum
+```
+
+```{r Plotting Phylum}
+#"Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species", "ASV", "OTU"
+Plot_Phylum_TAN = ggplot(my_Phylum_phyloseq,
+                          aes(x=as.factor(Cycle_word),
+                              y=Abundance,
+                              fill=Phylum)) +
+  geom_bar(stat = "identity", 
+           position = "fill") +
+  scale_y_continuous(labels = percent_format()) +
+  xlab("Cycle")+
+  ylab("Relative abundance (%)")+
+  scale_fill_manual("Phylum", values=Phylum_colour_list_16S)
+
+Plot_Phylum_TAN +theme(plot.title = element_text(size=18, hjust=0.5)) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+ggsave(
+  "CH4_Figure_4.7.png",
+  width = 8.5,
+  height = 6,
+  units = c("in"),
+  dpi = 300,
+  limitsize = TRUE
+)
+
+```
+
+```{r Set up Class}
+my_Class_phyloseq_TAN = Phyloseq_TAN_rm %>% #Identify the original subsetted phyloseq object
+  tax_glom("Class") %>% #Merge species with the same Phylum
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% #Convert the absolute count to a percentage count
+  psmelt() %>% #Adjust the data from a phyloseq object into a data.frame-class table  
+  filter(Abundance > 0.01)   %>% #Remove samples that make up less than one percent of the abundance.
+  arrange(Class)#Arange the samples by Phylum
+
+my_Class_phyloseq_TAN
+```
+
+```{r Plotting Class}
+#"Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species", "ASV", "OTU"
+Plot_Class_TAN = ggplot(my_Class_phyloseq_TAN,
+                          aes(x=as.factor(Cycle_word),
+                              y=Abundance,
+                              fill=Class)) +
+  geom_bar(stat = "identity", 
+           position = "fill") +
+  scale_y_continuous(labels = percent_format()) +
+  xlab("Cycle")+
+  ylab("Relative abundance (%)")+theme(plot.title = element_text(size=18, hjust=0.5)) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))+ scale_x_discrete(limits=positions)+ 
+  scale_fill_manual("Class", values= Class_colour_list)+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))+
+  theme(plot.title = element_text(size=26, hjust=0),axis.text=element_text(size=12),axis.title=element_text(size=16))+
+  theme(legend.title=element_text(size=20), legend.text=element_text(size=14))
+
+Plot_Class_TAN 
+
+ggsave(
+  "CH4_Class_Cycle_Figure 4.7.png",
+  width = 8.5,
+  height = 6,
+  units = c("in"),
+  dpi = 300,
+  limitsize = TRUE
+)
+
+```
+
+##Figure 4.8 and 4.9
+
+```{r Plot significantly correlated families}
+Summary_plot_Cycle_16S = ggplot(Summary_Cycle_Family, 
+                        aes(x=Depth, 
+                            y=Abundance*100, 
+                            colour= fct_reorder(Family, Abundance, .fun = mean, .desc = T),
+                            group = Family))+ 
+  geom_line(stat = "identity", lwd = 1) + 
+  geom_errorbar(aes(ymin=(Abundance-se)*100, 
+                    ymax=(Abundance+se)*100,
+                    colour=Family), 
+                position=pd
+                )+
+  theme_bw()+
+  theme(legend.position = "bottom", 
+        strip.background = element_blank())+
+  xlab("X")+
+  ylab("Relative abundance (%)")+
+  theme_bw()+
+  My_Theme+ scale_fill_discrete(name="Family")
+#Make sure it worked
+Summary_plot_Cycle_16S +theme(legend.title = element_blank())
+
+```
+
+```{r Deseq2 sorted SETUP}
+
+colorado <- function(src, boulder) {
+  if (!is.factor(src)) src <- factor(src)                   # make sure it's a factor
+  src_levels <- levels(src)                                 # retrieve the levels in their order
+  brave <- boulder %in% src_levels                          # make sure everything we want to make bold is actually in the factor levels
+  if (all(brave)) {                                         # if so
+    b_pos <- purrr::map_int(boulder, ~which(.==src_levels)) # then find out where they are
+    b_vec <- rep("plain", length(src_levels))               # make'm all plain first
+    b_vec[b_pos] <- "bold"                                  # make our targets bold
+    b_vec                                                   # return the new vector
+  } else {
+    stop("All elements of 'boulder' must be in src")
+  }
+}
+
+```
+
+```{r Deseq2 sorted part 2}
+Phyloseq_TAN_rm
+Phyloseq_TAN_SA = subset_samples(Phyloseq_TAN_rm, !WaterMass == "Sc-SA" & !WaterMass == "ST")
+Phyloseq_TAN_SA
+Phyloseq_TAN_ScSA = subset_samples(Phyloseq_TAN_rm, !WaterMass == "SA" & !WaterMass == "ST")
+Phyloseq_TAN_ScSA
+Phyloseq_TAN_ST = subset_samples(Phyloseq_TAN_rm, !WaterMass == "Sc-SA" & !WaterMass == "SA")
+Phyloseq_TAN_SA
+Phyloseq_TAN_ST
+Phyloseq_TAN_SA
+Phyloseq_TAN_ST
+dat_ASV_Sig_Salps_ST
+
+Ch4_ASV_Sig_Salps_ST <- 
+  ggplot(dat_ASV_Sig_Salps_ST, aes(x=log2FoldChange, y=Genus, color=Class)) +
+  geom_point(size=2) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))+geom_vline(xintercept=0) +scale_colour_manual("Class", values= Class_colour_list)
+Ch4_ASV_Sig_Salps_ST
+
+# Adjust the factor levels. No ggplot2 commands needed. Already what you want.
+Ch4_ASV_Sig_Salps_ST$data$ASV <- as.character(Ch4_ASV_Sig_Salps_ST$data$ASV)
+Ch4_ASV_Sig_Salps_ST$data$ASV <- factor(x = Ch4_ASV_Sig_Salps_ST$data$ASV, 
+                       levels = unique(Ch4_ASV_Sig_Salps_ST$data$ASV[order(as.character(Ch4_ASV_Sig_Salps_ST$data$Class))]))
+Ch4_ASV_Sig_Salps_ST <- Ch4_ASV_Sig_Salps_ST +scale_y_discrete(limits = rev)
+Ch4_ASV_Sig_Salps_ST
+
+# Adjust the factor levels. No ggplot2 commands needed. Already what you want.
+Ch4_ASV_Sig_Salps_ST$data$Genus <- as.character(Ch4_ASV_Sig_Salps_ST$data$Genus)
+Ch4_ASV_Sig_Salps_ST$data$Genus <- factor(x = Ch4_ASV_Sig_Salps_ST$data$Genus, 
+                       levels = unique(Ch4_ASV_Sig_Salps_ST$data$Genus[order(as.character(Ch4_ASV_Sig_Salps_ST$data$Class))]))
+Ch4_ASV_Sig_Salps_ST <- Ch4_ASV_Sig_Salps_ST +scale_y_discrete(limits = rev)
+Ch4_ASV_Sig_Salps_ST
+###########################
+
+Phyloseq_TAN_SA
+Phyloseq_TAN_ST
+dat_ASV_Sig_Salps_SA
+
+Ch4_ASV_plot_SA <- 
+  ggplot(dat_ASV_Sig_Salps_SA, aes(x=log2FoldChange, y=Genus, color=Class))+
+  geom_point(size=2) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))+
+  #scale_color_manual("Phylum", values=Phylum_colour_list_16S)+
+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))+geom_vline(xintercept=0) 
+
+Ch4_ASV_plot_SA
+
+# Adjust the factor levels. No ggplot2 commands needed. Already what you want.
+Ch4_ASV_plot_SA$data$Genus <- as.character(Ch4_ASV_plot_SA$data$Genus)
+Ch4_ASV_plot_SA$data$Genus <- factor(x = Ch4_ASV_plot_SA$data$Genus, 
+                       levels = unique(Ch4_ASV_plot_SA$data$Genus[order(as.character(Ch4_ASV_plot_SA$data$Phylum))]))
+Ch4_ASV_plot_SA +scale_y_discrete(limits = rev)
+
+
+Ch4_ASV_plot_SA <- 
+  ggplot(dat_ASV_Sig_Salps_SA, aes(x=log2FoldChange, y=Genus, color=Class)) +
+  geom_point(size=2) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))+ geom_vline(xintercept=0) +scale_colour_manual("Class", values= Class_colour_list)
+Ch4_ASV_plot_SA
+
+# Adjust the factor levels. No ggplot2 commands needed. Already what you want.
+Ch4_ASV_plot_SA$data$Genus <- as.character(Ch4_ASV_plot_SA$data$Genus)
+Ch4_ASV_plot_SA$data$Genus <- factor(x = Ch4_ASV_plot_SA$data$Genus, 
+                       levels = unique(Ch4_ASV_plot_SA$data$Genus[order(as.character(Ch4_ASV_plot_SA$data$Class))]))
+Ch4_ASV_plot_SA <- Ch4_ASV_plot_SA +scale_y_discrete(limits = rev)
+
+Ch4_ASV_plot_SA + Ch4_ASV_Sig_Salps_ST
+Ch4_ASV_plot_SA$data$Genus
+library(tidyverse)
+install.packages("glue")
+library(ggtext)
+library(glue)
+Ch4_ASV_plot_SA+ theme(axis.text.y=element_text(face=colorado(dat_ASV_Sig_Salps_SA$Genus, c("Amylibacter", "Colwellia", "BD1-7_clade","Synechococcus_CC9902", "Blastopirellula"))))
+
+Ch4_ASV_plot_SA+ theme(axis.text.y=element_text(face=colorado(dat_ASV_Sig_Salps_SA$Genus, c("Synechococcus_CC9902" ,"Blastopirellula", "Aureispira", "Lentimonas"))))
+
+Ch4_ASV_plot_SA 
+
+bold.tax <- c("Amylibacter", "Colwellia", "BD1-7_clade","Synechococcus_CC9902", "Blastopirellula")
+
+Ch4_ASV_plot_SA2+theme(axis.text.y = element_text(face = bold.labels))
+Ch4_ASV_plot_SA+theme(axis.text.y = element_text(face = bold.labels))
+bold.labels <- ifelse(levels(dat_ASV_Sig_Salps_SA$Genus) %in% bold.tax2, yes = "bold", no = "plain")
+Ch4_ASV_plot_SA+theme(axis.text.y = element_text(face = bold.labels))
+
+Ch4_ASV_Sig_Salps_ST_L <- Ch4_ASV_Sig_Salps_ST + geom_hline(yintercept = 6, linetype='dotted', col = 'gray') + geom_hline(yintercept = 9, linetype='dotted', col = 'gray') + geom_hline(yintercept = 20, linetype='dotted', col = 'gray') + geom_hline(yintercept = 16, linetype='dotted', col = 'gray')+ geom_hline(yintercept = 46, linetype='dotted', col = 'gray')
+
+layout <- 'AABB'
+
+Ch4_ASV_Genus_Sig_WM <- Ch4_ASV_Sig_Salps_ST +ggtitle("a") + theme(legend.position = "none") +Ch4_ASV_plot_SA +ggtitle("b") +
+  plot_layout(guides = 'collect', ncol = 2, design = layout)
+Ch4_ASV_Genus_Sig_WM
+
+Ch4_ASV_plot_SA_L <- Ch4_ASV_plot_SA + geom_hline(yintercept = 5, linetype='dotted', col = 'gray') + geom_hline(yintercept = 8, linetype='dotted', col = 'gray') + geom_hline(yintercept = 15, linetype='dotted', col = 'gray') + geom_hline(yintercept = 4, linetype='dotted', col = 'gray')+ geom_hline(yintercept = 7, linetype='dotted', col = 'gray')
+Ch4_ASV_plot_SA_L
+
+Ch4_ASV_Genus_Sig_WM <- Ch4_ASV_Sig_Salps_ST_L +ggtitle("a") + theme(legend.position = "none") +Ch4_ASV_plot_SA_L +ggtitle("b") +
+  plot_layout(guides = 'collect', ncol = 2, design = layout)
+Ch4_ASV_Genus_Sig_WM
+
+ggsave(
+  "Ch4_ASV_Sig_Salps.png",
+  width =8.5,
+  height = 14,
+  units = c("in"),
+  dpi = 300,
+  limitsize = TRUE
+)
+
+```
+
+```{r Deseq2 sorted part 3}
+Phyloseq_TAN_SA
+Phyloseq_TAN_ST
+dat_ASV_Sig_Salps_ST
+
+Ch4_ASV_Sig_Salps_ST_ASV <- 
+  ggplot(dat_ASV_Sig_Salps_ST, aes(x=log2FoldChange, y=ASV, color=Class)) +
+  geom_point(size=2) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))+geom_vline(xintercept=0) +scale_colour_manual("Class", values= Class_colour_list)
+Ch4_ASV_Sig_Salps_ST_ASV
+
+# Adjust the factor levels. No ggplot2 commands needed. Already what you want.
+Ch4_ASV_Sig_Salps_ST_ASV$data$ASV <- as.character(Ch4_ASV_Sig_Salps_ST_ASV$data$ASV)
+Ch4_ASV_Sig_Salps_ST_ASV$data$ASV <- factor(x = Ch4_ASV_Sig_Salps_ST_ASV$data$ASV, 
+                       levels = unique(Ch4_ASV_Sig_Salps_ST_ASV$data$ASV[order(as.character(Ch4_ASV_Sig_Salps_ST_ASV$data$Class))]))
+Ch4_ASV_Sig_Salps_ST_ASV <- Ch4_ASV_Sig_Salps_ST_ASV +scale_y_discrete(limits = rev)
+Ch4_ASV_Sig_Salps_ST_ASV
+
+###########################
+
+Phyloseq_TAN_SA
+Phyloseq_TAN_ST
+dat_ASV_Sig_Salps_SA
+
+
+Ch4_ASV_plot_SA <- 
+  ggplot(dat_ASV_Sig_Salps_SA, aes(x=log2FoldChange, y=ASV, color=Class)) +
+  geom_point(size=2) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))+ geom_vline(xintercept=0) +scale_colour_manual("Class", values= Class_colour_list)
+Ch4_ASV_plot_SA
+
+# Adjust the factor levels. No ggplot2 commands needed. Already what you want.
+Ch4_ASV_plot_SA$data$ASV <- as.character(Ch4_ASV_plot_SA$data$ASV)
+Ch4_ASV_plot_SA$data$ASV <- factor(x = Ch4_ASV_plot_SA$data$ASV, 
+                       levels = unique(Ch4_ASV_plot_SA$data$ASV[order(as.character(Ch4_ASV_plot_SA$data$Class))]))
+Ch4_ASV_plot_SA <- Ch4_ASV_plot_SA +scale_y_discrete(limits = rev)
+
+Ch4_ASV_plot_SA + Ch4_ASV_Sig_Salps_ST_ASV
+Ch4_ASV_Sig_WM <- Ch4_ASV_Sig_Salps_ST_ASV +ggtitle("a") + theme(legend.position = "none") +Ch4_ASV_plot_SA +ggtitle("b") +
+  plot_layout(guides = 'collect', ncol = 2, design = layout)
+Ch4_ASV_Sig_WM
+##############
+
+Ch4_ASV_Sig_Salps_ST_L <- Ch4_ASV_Sig_Salps_ST + geom_hline(yintercept = 6, linetype='dotted', col = 'gray') + geom_hline(yintercept = 9, linetype='dotted', col = 'gray') + geom_hline(yintercept = 20, linetype='dotted', col = 'gray') + geom_hline(yintercept = 16, linetype='dotted', col = 'gray')+ geom_hline(yintercept = 46, linetype='dotted', col = 'gray')
+
+layout <- 'AABB'
+
+Ch4_ASV_Genus_Sig_WM <- Ch4_ASV_Sig_Salps_ST +ggtitle("a") + theme(legend.position = "none") +Ch4_ASV_plot_SA +ggtitle("b") +
+  plot_layout(guides = 'collect', ncol = 2, design = layout)
+Ch4_ASV_Genus_Sig_WM
+
+Ch4_ASV_plot_SA_L <- Ch4_ASV_plot_SA + geom_hline(yintercept = 5, linetype='dotted', col = 'gray') + geom_hline(yintercept = 8, linetype='dotted', col = 'gray') + geom_hline(yintercept = 15, linetype='dotted', col = 'gray') + geom_hline(yintercept = 4, linetype='dotted', col = 'gray')+ geom_hline(yintercept = 7, linetype='dotted', col = 'gray')
+Ch4_ASV_plot_SA_L
+
+Ch4_ASV_Genus_Sig_WM <- Ch4_ASV_Sig_Salps_ST_L +ggtitle("a") + theme(legend.position = "none") +Ch4_ASV_plot_SA_L +ggtitle("b") +
+  plot_layout(guides = 'collect', ncol = 2, design = layout)
+Ch4_ASV_Genus_Sig_WM
+
+ggsave(
+  "Ch4_ASV_Sig_Salps_line.png",
+  width =12,
+  height = 10,
+  units = c("in"),
+  dpi = 300,
+  limitsize = TRUE
+)
+
+```
+
+```{r Deseq2 sorted part 4}
+Phyloseq_TAN_SA
+Phyloseq_TAN_ST
+dat_ASV_Sig_Salps_ST
+
+Ch4_ASV_Sig_Salps_ST <- 
+  ggplot(dat_ASV_Sig_Salps_ST, aes(x=log2FoldChange, y=Genus, color=Class)) +
+  geom_point(size=2) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))+geom_vline(xintercept=0) +scale_colour_manual("Class", values= Class_colour_list)
+Ch4_ASV_Sig_Salps_ST
+
+# Adjust the factor levels. No ggplot2 commands needed. Already what you want.
+Ch4_ASV_Sig_Salps_ST$data$ASV <- as.character(Ch4_ASV_Sig_Salps_ST$data$ASV)
+Ch4_ASV_Sig_Salps_ST$data$ASV <- factor(x = Ch4_ASV_Sig_Salps_ST$data$ASV, 
+                       levels = unique(Ch4_ASV_Sig_Salps_ST$data$ASV[order(as.character(Ch4_ASV_Sig_Salps_ST$data$Class))]))
+Ch4_ASV_Sig_Salps_ST <- Ch4_ASV_Sig_Salps_ST +scale_y_discrete(limits = rev)
+Ch4_ASV_Sig_Salps_ST
+
+# Adjust the factor levels. No ggplot2 commands needed. Already what you want.
+Ch4_ASV_Sig_Salps_ST$data$Genus <- as.character(Ch4_ASV_Sig_Salps_ST$data$Genus)
+Ch4_ASV_Sig_Salps_ST$data$Genus <- factor(x = Ch4_ASV_Sig_Salps_ST$data$Genus, 
+                       levels = unique(Ch4_ASV_Sig_Salps_ST$data$Genus[order(as.character(Ch4_ASV_Sig_Salps_ST$data$Class))]))
+Ch4_ASV_Sig_Salps_ST <- Ch4_ASV_Sig_Salps_ST +scale_y_discrete(limits = rev)
+Ch4_ASV_Sig_Salps_ST
+###########################
+
+Phyloseq_TAN_SA
+Phyloseq_TAN_ST
+dat_ASV_Sig_Salps_SA
+
+Ch4_ASV_plot_SA <- 
+  ggplot(dat_ASV_Sig_Salps_SA, aes(x=log2FoldChange, y=Genus, color=Class))+
+  geom_point(size=2) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))+
+  #scale_color_manual("Phylum", values=Phylum_colour_list_16S)+
+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))+geom_vline(xintercept=0) 
+Ch4_ASV_plot_SA
+
+# Adjust the factor levels. No ggplot2 commands needed. Already what you want.
+Ch4_ASV_plot_SA$data$Genus <- as.character(Ch4_ASV_plot_SA$data$Genus)
+Ch4_ASV_plot_SA$data$Genus <- factor(x = Ch4_ASV_plot_SA$data$Genus, 
+                       levels = unique(Ch4_ASV_plot_SA$data$Genus[order(as.character(Ch4_ASV_plot_SA$data$Phylum))]))
+Ch4_ASV_plot_SA +scale_y_discrete(limits = rev)
+
+
+Ch4_ASV_plot_SA <- 
+  ggplot(dat_ASV_Sig_Salps_SA, aes(x=log2FoldChange, y=Genus, color=Class)) +
+  geom_point(size=2) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))+ geom_vline(xintercept=0) +scale_colour_manual("Class", values= Class_colour_list)
+Ch4_ASV_plot_SA
+
+# Adjust the factor levels. No ggplot2 commands needed. Already what you want.
+Ch4_ASV_plot_SA$data$Genus <- as.character(Ch4_ASV_plot_SA$data$Genus)
+Ch4_ASV_plot_SA$data$Genus <- factor(x = Ch4_ASV_plot_SA$data$Genus, 
+                       levels = unique(Ch4_ASV_plot_SA$data$Genus[order(as.character(Ch4_ASV_plot_SA$data$Class))]))
+Ch4_ASV_plot_SA <- Ch4_ASV_plot_SA +scale_y_discrete(limits = rev)
+
+Ch4_ASV_plot_SA + Ch4_ASV_Sig_Salps_ST
+Ch4_ASV_plot_SA$data$Genus
+library(tidyverse)
+install.packages("glue")
+library(ggtext)
+library(glue)
+Ch4_ASV_plot_SA+ theme(axis.text.y=element_text(face=colorado(dat_ASV_Sig_Salps_SA$Genus, c("Amylibacter", "Colwellia", "BD1-7_clade","Synechococcus_CC9902", "Blastopirellula"))))
+
+Ch4_ASV_plot_SA+ theme(axis.text.y=element_text(face=colorado(dat_ASV_Sig_Salps_SA$Genus, c("Synechococcus_CC9902" ,"Blastopirellula", "Aureispira", "Lentimonas"))))
+
+Ch4_ASV_plot_SA 
+
+bold.tax <- c("Amylibacter", "Colwellia", "BD1-7_clade","Synechococcus_CC9902", "Blastopirellula")
+
+Ch4_ASV_plot_SA2+theme(axis.text.y = element_text(face = bold.labels))
+Ch4_ASV_plot_SA+theme(axis.text.y = element_text(face = bold.labels))
+bold.labels <- ifelse(levels(dat_ASV_Sig_Salps_SA$Genus) %in% bold.tax2, yes = "bold", no = "plain")
+Ch4_ASV_plot_SA+theme(axis.text.y = element_text(face = bold.labels))
+
+Ch4_ASV_Sig_Salps_ST_L <- Ch4_ASV_Sig_Salps_ST + geom_hline(yintercept = 6, linetype='dotted', col = 'gray') + geom_hline(yintercept = 9, linetype='dotted', col = 'gray') + geom_hline(yintercept = 20, linetype='dotted', col = 'gray') + geom_hline(yintercept = 16, linetype='dotted', col = 'gray')+ geom_hline(yintercept = 46, linetype='dotted', col = 'gray')
+
+layout <- 'AABB'
+
+Ch4_ASV_Genus_Sig_WM <- Ch4_ASV_Sig_Salps_ST +ggtitle("a") + theme(legend.position = "none") +Ch4_ASV_plot_SA +ggtitle("b") +
+  plot_layout(guides = 'collect', ncol = 2, design = layout)
+Ch4_ASV_Genus_Sig_WM
+
+Ch4_ASV_plot_SA_L <- Ch4_ASV_plot_SA + geom_hline(yintercept = 5, linetype='dotted', col = 'gray') + geom_hline(yintercept = 8, linetype='dotted', col = 'gray') + geom_hline(yintercept = 15, linetype='dotted', col = 'gray') + geom_hline(yintercept = 4, linetype='dotted', col = 'gray')+ geom_hline(yintercept = 7, linetype='dotted', col = 'gray')
+Ch4_ASV_plot_SA_L
+
+Ch4_ASV_Genus_Sig_WM <- Ch4_ASV_Sig_Salps_ST_L +ggtitle("a") + theme(legend.position = "none") +Ch4_ASV_plot_SA_L +ggtitle("b") +
+  plot_layout(guides = 'collect', ncol = 2, design = layout)
+Ch4_ASV_Genus_Sig_WM
+
+ggsave(
+  "Ch4_ASV_Sig_Salps.png",
+  width =8.5,
+  height = 14,
+  units = c("in"),
+  dpi = 300,
+  limitsize = TRUE
+)
+
+```
